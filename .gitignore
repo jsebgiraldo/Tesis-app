@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# VSCode
+.vscode/
+
+# pcaps and logs
+/data/pcaps/*.pcap
+/data/pcaps/*.pcapng
+/logs/
+
+# ESP-IDF build
+**/build/
+**/sdkconfig
+**/sdkconfig.old

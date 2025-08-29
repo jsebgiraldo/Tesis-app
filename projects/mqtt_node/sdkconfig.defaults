@@ -1,0 +1,15 @@
+# Network selection
+CONFIG_MQTT_USE_WIFI=y
+# CONFIG_MQTT_USE_ETH is not set
+# CONFIG_MQTT_USE_THREAD is not set
+
+# WiFi creds (cambiar por menuconfig o sobrescribir)
+CONFIG_MQTT_WIFI_SSID="YOUR_SSID"
+CONFIG_MQTT_WIFI_PASS="YOUR_PASS"
+
+# MQTT broker
+CONFIG_MQTT_BROKER_URI="mqtt://test.mosquitto.org:1883"
+
+# Enable required components
+CONFIG_MQTT_PROTOCOL_311=y
+CONFIG_MQTT_TRANSPORT_SSL=n
