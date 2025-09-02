@@ -1,0 +1,27 @@
+menu "MQTT Node Options"
+
+config MQTT_USE_WIFI
+    bool "Usar WiFi"
+    default n
+
+config MQTT_USE_ETH
+    bool "Usar Ethernet"
+    default y
+
+config MQTT_USE_THREAD
+    bool "Usar Thread (ESP32-H2/H4)"
+    default n
+
+config MQTT_WIFI_SSID
+    string "WiFi SSID"
+    default "YOUR_SSID"
+
+config MQTT_WIFI_PASS
+    string "WiFi Password"
+    default "YOUR_PASS"
+
+config MQTT_BROKER_URI
+    string "MQTT Broker URI"
+    default "mqtt://test.mosquitto.org:1883"
+
+endmenu
