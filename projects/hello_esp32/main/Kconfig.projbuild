@@ -1,0 +1,25 @@
+menu "Hello ESP32 app configuration"
+
+config HELLO_BLINK_GPIO
+    int "GPIO para LED (blink)"
+    range 0 48
+    default 2
+    help
+        Selecciona el GPIO del LED para el ejemplo de parpadeo.
+        En ESP32-C6 muchos devkits usan el LED en GPIO8 o GPIO15. Ajusta según tu placa.
+
+config HELLO_RGB_LED_GPIO
+    int "GPIO para LED RGB (WS2812 / NeoPixel controlado por RMT)"
+    range 0 48
+    default 8
+    help
+        Pin de datos del LED RGB direccionable. En muchos ESP32-C6 devkits el RGB está en GPIO8.
+
+config HELLO_RGB_LED_COUNT
+    int "Número de LEDs RGB"
+    range 1 64
+    default 1
+    help
+        Cantidad de píxeles en la tira LED. Para LED RGB integrado usualmente es 1.
+
+endmenu
