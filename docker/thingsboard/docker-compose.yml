@@ -9,6 +9,11 @@ services:
       POSTGRES_PASSWORD: postgres
     volumes:
       - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d thingsboard"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
   kafka:
     restart: always
     image: bitnami/kafka:4.0
@@ -25,7 +30,7 @@ services:
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "1"
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "1"
-      
+
       KAFKA_CFG_PROCESS_ROLES: "controller,broker" # KRaft
       KAFKA_CFG_NODE_ID: "0" # KRaft
       KAFKA_CFG_CONTROLLER_LISTENER_NAMES: "CONTROLLER" # KRaft
@@ -51,11 +56,15 @@ services:
     environment:
       TB_SERVICE_ID: tb-ce-node
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/thingsboard
+      SPRING_DATASOURCE_USERNAME: postgres
+      SPRING_DATASOURCE_PASSWORD: postgres
       TB_QUEUE_TYPE: kafka
       TB_KAFKA_SERVERS: kafka:9092
     depends_on:
-      - postgres
-      - kafka
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_started
 
 volumes:
   postgres-data:

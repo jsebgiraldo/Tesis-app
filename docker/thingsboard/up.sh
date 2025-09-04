@@ -11,5 +11,5 @@ echo "Starting ThingsBoard CE stack (Postgres + Kafka + tb-node) ..."
 cd "$SCRIPT_DIR"
 docker compose up -d
 echo "REST/API (and UI if present): http://localhost:8080"
-echo "Kafka (host): localhost:29092"
+echo "Kafka (host): localhost:9092"
 
