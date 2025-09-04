@@ -1,0 +1,41 @@
+menu "LwM2M APP"
+
+config EXAMPLE_WIFI_SSID
+    string "WiFi SSID"
+    default "Famili Giraldo"
+
+config EXAMPLE_WIFI_PASSWORD
+    string "WiFi Password"
+    default "1053866507"
+
+config EXAMPLE_MAXIMUM_RETRY
+    int "Maximum WiFi reconnect retries"
+    default 10
+    range 0 100
+
+config LWM2M_ENDPOINT_NAME
+    string "LwM2M Endpoint Name"
+    default "esp32c6-temp"
+
+config LWM2M_SERVER_URI
+    string "LwM2M Server URI (coap(s)://host:port)"
+    default "coap://leshan.eclipseprojects.io:5683"
+
+config LWM2M_BOOTSTRAP
+    bool "Use LwM2M Bootstrap"
+    default n
+
+config LWM2M_BOOTSTRAP_URI
+    string "Bootstrap Server URI (coap(s)://host:port)"
+    depends on LWM2M_BOOTSTRAP
+    default "coap://leshan.eclipseprojects.io:5783"
+
+config LWM2M_SECURITY_PSK_ID
+    string "DTLS PSK Identity (if coaps)"
+    default ""
+
+config LWM2M_SECURITY_PSK_KEY
+    string "DTLS PSK Key (hex)"
+    default ""
+
+endmenu

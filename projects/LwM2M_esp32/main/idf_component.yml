@@ -1,0 +1,7 @@
+dependencies:
+  idf: ">=5.0"
+  anjay-esp-idf:
+    git: https://github.com/jsebgiraldo/LwM2M-espidf.git
+    path: components/anjay-esp-idf
+    version: develop
+    require: public
