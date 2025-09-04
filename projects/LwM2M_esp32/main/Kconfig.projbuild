@@ -10,7 +10,7 @@ config EXAMPLE_WIFI_PASSWORD
 
 config EXAMPLE_MAXIMUM_RETRY
     int "Maximum WiFi reconnect retries"
-    default 10
+    default 5
     range 0 100
 
 config LWM2M_ENDPOINT_NAME
@@ -19,7 +19,7 @@ config LWM2M_ENDPOINT_NAME
 
 config LWM2M_SERVER_URI
     string "LwM2M Server URI (coap(s)://host:port)"
-    default "coap://leshan.eclipseprojects.io:5683"
+    default "coap://192.168.3.100:5683"
 
 config LWM2M_BOOTSTRAP
     bool "Use LwM2M Bootstrap"
@@ -38,14 +38,23 @@ config LWM2M_SECURITY_PSK_KEY
     string "DTLS PSK Key (hex)"
     default ""
 
-config LWM2M_TASK_STACK_SIZE
-    int "LwM2M task stack size (bytes)"
-    default 8192
-    range 4096 65536
+config LWM2M_START_DELAY_MS
+    int "Startup delay before first register (ms)"
+    default 1000
+    range 0 10000
+    help
+        Wait this long after the LwM2M task starts before creating the client
+        and attempting the first Register. Helps avoid transient network/ARP
+        races on some Wi‑Fi setups.
 
-config LWM2M_CONNECT_TIMEOUT_S
-    int "LwM2M registration timeout (seconds)"
-    default 30
-    range 5 600
+config LWM2M_RETRY_DELAY_S
+    int "Retry delay after failed registration (seconds)"
+    default 5
+    range 1 300
+
+config LWM2M_MAX_RETRIES
+    int "Max registration retries (0=infinite)"
+    default 0
+    range 0 100
 
 endmenu

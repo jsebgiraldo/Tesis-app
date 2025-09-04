@@ -8,17 +8,28 @@
 #include <anjay/anjay.h>
 #include <anjay/security.h>
 #include <anjay/server.h>
+#include <anjay/lwm2m_send.h>
 #include <avsystem/commons/avs_time.h>
 
 // TEMP: build marker was here
 
 // Fallback defaults if sdkconfig hasn't yet picked up new Kconfig symbols
-#ifndef CONFIG_LWM2M_CONNECT_TIMEOUT_S
-#define CONFIG_LWM2M_CONNECT_TIMEOUT_S 30
-#endif
+
 #ifndef CONFIG_LWM2M_TASK_STACK_SIZE
 #define CONFIG_LWM2M_TASK_STACK_SIZE 8192
 #endif
+
+// Retry policy fallbacks
+#ifndef CONFIG_LWM2M_RETRY_DELAY_S
+#define CONFIG_LWM2M_RETRY_DELAY_S 5
+#endif
+
+#ifndef CONFIG_LWM2M_MAX_RETRIES
+#define CONFIG_LWM2M_MAX_RETRIES 3
+#endif
+
+
+#define APP_SERVER_SSID 1
 
 static const char *TAG = "lwm2m_client";
 
@@ -73,6 +84,19 @@ static const anjay_dm_object_def_t OBJ3303 = {
 };
 
 static const anjay_dm_object_def_t *const OBJ3303_DEF = &OBJ3303;
+
+#if CONFIG_ANJAY_WITH_SEND
+static void send_finished_cb(anjay_t *anjay, anjay_ssid_t ssid,
+                             const anjay_send_batch_t *batch, int result,
+                             void *data) {
+    (void) anjay; (void) batch; (void) data;
+    if (result == ANJAY_SEND_SUCCESS) {
+        ESP_LOGI(TAG, "Send delivered to SSID %d", (int) ssid);
+    } else {
+        ESP_LOGW(TAG, "Send result SSID %d: %d", (int) ssid, result);
+    }
+}
+#endif
 
 static int setup_security(anjay_t *anjay) {
     // purge any existing Security(0) instances before configuring
@@ -138,6 +162,11 @@ static int setup_server(anjay_t *anjay) {
 }
 
 static void lwm2m_client_task(void *arg) {
+    // Optional delay to let Wi‑Fi/ARP settle before first Register
+    if (CONFIG_LWM2M_START_DELAY_MS > 0) {
+        ESP_LOGI(TAG, "Startup delay %d ms before LwM2M init", (int) CONFIG_LWM2M_START_DELAY_MS);
+        vTaskDelay(pdMS_TO_TICKS(CONFIG_LWM2M_START_DELAY_MS));
+    }
     anjay_configuration_t cfg = {
         .endpoint_name = CONFIG_LWM2M_ENDPOINT_NAME,
         .in_buffer_size = 4000,
@@ -172,26 +201,92 @@ static void lwm2m_client_task(void *arg) {
     ESP_LOGI(TAG, "Starting Anjay event loop");
     #endif
 
-    // Wait until registration completed (success or failure) or until timeout
-    const int timeout_s = CONFIG_LWM2M_CONNECT_TIMEOUT_S;
-    const avs_time_duration_t max_wait = avs_time_duration_from_scalar(1, AVS_TIME_S);
-    int waited = 0;
-    while (anjay_ongoing_registration_exists(anjay)) {
-        (void) anjay_event_loop_run(anjay, max_wait);
-        if (++waited >= timeout_s) {
-            ESP_LOGE(TAG, "LwM2M registration timeout after %d s. Stopping client.", timeout_s);
+    // Controlled registration with user-defined timeout and retry policy
+    int attempt = 0;
+    const avs_time_duration_t max_wait = avs_time_duration_from_scalar(250, AVS_TIME_MS);
+    while (1) {
+        // Wait for ongoing registration to finish or time out
+        const int timeout_s = 5;
+        avs_time_real_t start = avs_time_real_now();
+        while (anjay_ongoing_registration_exists(anjay)) {
+            (void) anjay_event_loop_run(anjay, max_wait);
+            avs_time_duration_t elapsed = avs_time_real_diff(avs_time_real_now(), start);
+            if (elapsed.seconds >= timeout_s) {
+                ESP_LOGW(TAG, "Register attempt %d timed out after %d s", attempt + 1, timeout_s);
+                break;
+            }
+        }
+
+        if (!anjay_all_connections_failed(anjay) && !anjay_ongoing_registration_exists(anjay)) {
+            // Registered successfully
+            break;
+        }
+
+        // Failed: decide on another attempt
+        attempt++;
+        if (CONFIG_LWM2M_MAX_RETRIES > 0 && attempt >= CONFIG_LWM2M_MAX_RETRIES) {
+            ESP_LOGE(TAG, "Registration failed after %d attempts. Stopping client.", attempt);
             goto cleanup;
         }
-    }
-
-    if (anjay_all_connections_failed(anjay)) {
-        ESP_LOGE(TAG, "LwM2M registration failed. Stopping client.");
-        goto cleanup;
+    ESP_LOGW(TAG, "Scheduling retry %d after %ds", attempt, (int) CONFIG_LWM2M_RETRY_DELAY_S);
+        vTaskDelay(pdMS_TO_TICKS(CONFIG_LWM2M_RETRY_DELAY_S * 1000));
+    // Trigger reconnect for all transports; this will schedule re-register if needed
+    (void) anjay_transport_schedule_reconnect(anjay, ANJAY_TRANSPORT_SET_ALL);
     }
 
     ESP_LOGI(TAG, "LwM2M registered. Entering main loop.");
+#if CONFIG_LWM2M_SEND_ENABLE
+    ESP_LOGI(TAG, "LwM2M Send enabled, period=%ds", (int) CONFIG_LWM2M_SEND_PERIOD_S);
+#endif
+    uint32_t last_send_tick = xTaskGetTickCount();
+    const uint32_t send_period_ticks = pdMS_TO_TICKS(5 * 1000);
+    #if 1
+    uint32_t last_notify_tick = xTaskGetTickCount();
+    const uint32_t notify_period_ticks = pdMS_TO_TICKS(5 * 1000);
+    #endif
     while (1) {
         (void) anjay_event_loop_run(anjay, max_wait);
+
+#if 1 && CONFIG_ANJAY_WITH_SEND && !CONFIG_LWM2M_BOOTSTRAP
+        // Periodically push current temperature via LwM2M Send (TS 1.1)
+        uint32_t now = xTaskGetTickCount();
+        if ((now - last_send_tick) >= send_period_ticks) {
+            last_send_tick = now;
+            anjay_send_batch_builder_t *builder = anjay_send_batch_builder_new();
+            if (builder) {
+                // Add current 3303/0/5700 and 3303/0/5701 values
+                anjay_send_batch_data_add_current(builder, anjay, 3303, 0, 5700);
+                anjay_send_batch_data_add_current(builder, anjay, 3303, 0, 5701);
+                anjay_send_batch_t *batch = anjay_send_batch_builder_compile(&builder);
+                if (batch) {
+                    anjay_send_result_t r = anjay_send_deferrable(anjay, APP_SERVER_SSID, batch, send_finished_cb, NULL);
+                    if (r != ANJAY_SEND_OK) {
+                        ESP_LOGW(TAG, "Send deferred/failed: %d", (int) r);
+                    } else {
+                        ESP_LOGI(TAG, "Send queued -> SSID %d", APP_SERVER_SSID);
+                    }
+                    anjay_send_batch_release(&batch);
+                } else {
+                    ESP_LOGW(TAG, "Failed to compile send batch");
+                }
+            }
+        }
+#endif
+
+#if 1
+        uint32_t now2 = xTaskGetTickCount();
+        if ((now2 - last_notify_tick) >= notify_period_ticks) {
+            last_notify_tick = now2;
+#ifdef ANJAY_WITH_OBSERVATION_STATUS
+            anjay_resource_observation_status_t st =
+                anjay_resource_observation_status(anjay, 3303, 0, 5700);
+            ESP_LOGI(TAG, "OBS status 3303/0/5700: observed=%d pmin=%ld",
+                     (int) st.is_observed, (long) st.min_period);
+#endif
+            (void) anjay_notify_changed(anjay, 3303, 0, 5700);
+            ESP_LOGI(TAG, "Notify queued for 3303/0/5700");
+        }
+#endif
     }
 
 cleanup:
