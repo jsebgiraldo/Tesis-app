@@ -16,8 +16,9 @@ Nota: En despliegues microservicio, los transports (MQTT/CoAP) y la UI web suele
 cd docker/thingsboard
 ./up.sh                 # levanta postgres, kafka y thingsboard-ce
 
-# (Primera vez) Inicializa el esquema y datos demo:
-docker compose run --rm -e INSTALL_TB=true -e LOAD_DEMO=true thingsboard-ce
+# (Primera vez) Inicializa el esquema (y opcionalmente datos demo):
+./install.sh                  # solo esquema
+LOAD_DEMO=true ./install.sh   # esquema + datos demo
 
 # Ver logs del servicio principal
 ./logs.sh
@@ -32,8 +33,7 @@ Luego abre `http://localhost:8080`.
 
 ## Puertos expuestos
 - 8080: REST API (y UI si `tb-web-ui` está embebido o habilitado)
-- 29092: Kafka (PLAINTEXT para el host)
-   - Interno en la red de Docker: `kafka:9092`
+- 9092: Kafka (PLAINTEXT dentro de Docker y expuesto al host en el mismo puerto)
 - 5432: Postgres (si necesitas conectarte desde el host)
 
 MQTT/CoAP: en microservicios suelen correr en contenedores de transporte separados. No se incluyen aquí por defecto.
@@ -60,8 +60,7 @@ Este stack usa volúmenes con nombre de Docker:
 `./reset.sh` elimina los contenedores y estos volúmenes para un arranque limpio.
 
 ## Notas
-- Kafka está expuesto al host en `localhost:29092` (PLAINTEXT, solo para desarrollo).
 - Variables de conexión dentro de la red:
-   - Postgres: `postgres:5432` (usuario/clave: `thingsboard` / `thingsboard`)
+   - Postgres: `postgres:5432` (usuario/clave por defecto: `postgres` / `postgres`)
    - Kafka: `kafka:9092`
 - Consulta la documentación oficial de ThingsBoard 4.x para añadir transports (`tb-mqtt-transport`, `tb-coap-transport`) y la UI (`tb-web-ui`) si los necesitas.

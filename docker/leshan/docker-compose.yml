@@ -1,0 +1,11 @@
+services:
+  leshan:
+    image: altshiftcreative/leshan-server:1.0.4
+    restart: always
+    ports:
+      # Web UI (Leshan default 8080). Host uses 8081 to avoid conflict with ThingsBoard (8080)
+      - "8081:8080"
+      # CoAP/CoAPS (Leshan defaults 5683/5684). Host uses 5690/5691 to avoid TB's 5683-5688 range
+      - "5690:5683/udp"
+      - "5691:5684/udp"
+    environment: {}
