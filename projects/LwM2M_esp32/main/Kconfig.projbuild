@@ -2,7 +2,7 @@ menu "LwM2M APP"
 
 config EXAMPLE_WIFI_SSID
     string "WiFi SSID"
-    default "Famili Giraldo"
+    default "SEBAS_LAN_AP"
 
 config EXAMPLE_WIFI_PASSWORD
     string "WiFi Password"
@@ -37,5 +37,15 @@ config LWM2M_SECURITY_PSK_ID
 config LWM2M_SECURITY_PSK_KEY
     string "DTLS PSK Key (hex)"
     default ""
+
+config LWM2M_TASK_STACK_SIZE
+    int "LwM2M task stack size (bytes)"
+    default 8192
+    range 4096 65536
+
+config LWM2M_CONNECT_TIMEOUT_S
+    int "LwM2M registration timeout (seconds)"
+    default 30
+    range 5 600
 
 endmenu

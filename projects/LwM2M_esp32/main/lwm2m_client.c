@@ -12,6 +12,14 @@
 
 // TEMP: build marker was here
 
+// Fallback defaults if sdkconfig hasn't yet picked up new Kconfig symbols
+#ifndef CONFIG_LWM2M_CONNECT_TIMEOUT_S
+#define CONFIG_LWM2M_CONNECT_TIMEOUT_S 30
+#endif
+#ifndef CONFIG_LWM2M_TASK_STACK_SIZE
+#define CONFIG_LWM2M_TASK_STACK_SIZE 8192
+#endif
+
 static const char *TAG = "lwm2m_client";
 
 static float read_temperature(void) {
@@ -129,7 +137,7 @@ static int setup_server(anjay_t *anjay) {
 #endif
 }
 
-void lwm2m_client_start(void) {
+static void lwm2m_client_task(void *arg) {
     anjay_configuration_t cfg = {
         .endpoint_name = CONFIG_LWM2M_ENDPOINT_NAME,
         .in_buffer_size = 4000,
@@ -139,7 +147,7 @@ void lwm2m_client_start(void) {
     anjay_t *anjay = anjay_new(&cfg);
     if (!anjay) {
         ESP_LOGE(TAG, "Could not create Anjay instance");
-        return;
+        vTaskDelete(NULL);
     }
 
     if (anjay_security_object_install(anjay)
@@ -164,11 +172,33 @@ void lwm2m_client_start(void) {
     ESP_LOGI(TAG, "Starting Anjay event loop");
     #endif
 
+    // Wait until registration completed (success or failure) or until timeout
+    const int timeout_s = CONFIG_LWM2M_CONNECT_TIMEOUT_S;
     const avs_time_duration_t max_wait = avs_time_duration_from_scalar(1, AVS_TIME_S);
+    int waited = 0;
+    while (anjay_ongoing_registration_exists(anjay)) {
+        (void) anjay_event_loop_run(anjay, max_wait);
+        if (++waited >= timeout_s) {
+            ESP_LOGE(TAG, "LwM2M registration timeout after %d s. Stopping client.", timeout_s);
+            goto cleanup;
+        }
+    }
+
+    if (anjay_all_connections_failed(anjay)) {
+        ESP_LOGE(TAG, "LwM2M registration failed. Stopping client.");
+        goto cleanup;
+    }
+
+    ESP_LOGI(TAG, "LwM2M registered. Entering main loop.");
     while (1) {
         (void) anjay_event_loop_run(anjay, max_wait);
     }
 
 cleanup:
     anjay_delete(anjay);
+    vTaskDelete(NULL);
+}
+
+void lwm2m_client_start(void) {
+    xTaskCreate(lwm2m_client_task, "lwm2m", CONFIG_LWM2M_TASK_STACK_SIZE, NULL, tskIDLE_PRIORITY + 2, NULL);
 }
