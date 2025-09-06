@@ -43,7 +43,7 @@ services:
     restart: always
     image: "thingsboard/tb-node:4.2.0"
     ports:
-  - "8081:8080"
+      - "8080:8080"
       - "7070:7070"
       - "1883:1883"
       - "8883:8883"
