@@ -6,7 +6,9 @@
 #include "esp_event.h"
 #include "esp_system.h"
 #include "esp_wifi.h"
+#include "esp_netif.h"
 #include <string.h>
+#include <stdlib.h>
 #include "temp_object.h"
 
 #include <anjay/anjay.h>
@@ -24,10 +26,6 @@
 #define CONFIG_LWM2M_TASK_STACK_SIZE 8192
 #endif
 
-#ifndef CONFIG_LWM2M_CONNECT_TIMEOUT_S
-#define CONFIG_LWM2M_CONNECT_TIMEOUT_S 30
-#endif
-
 #ifndef CONFIG_LWM2M_START_DELAY_MS
 #define CONFIG_LWM2M_START_DELAY_MS 1000
 #endif
@@ -38,24 +36,6 @@
 
 #ifndef CONFIG_LWM2M_SEND_PERIOD_S
 #define CONFIG_LWM2M_SEND_PERIOD_S 30
-#endif
-
-
-// Retry policy fallbacks
-#ifndef CONFIG_LWM2M_RETRY_DELAY_S
-#define CONFIG_LWM2M_RETRY_DELAY_S 5
-#endif
-
-#ifndef CONFIG_LWM2M_MAX_RETRIES
-#define CONFIG_LWM2M_MAX_RETRIES 3
-#endif
-
-// Advanced retry controls (cap and jitter)
-#ifndef CONFIG_LWM2M_RETRY_MAX_DELAY_S
-#define CONFIG_LWM2M_RETRY_MAX_DELAY_S 60
-#endif
-#ifndef CONFIG_LWM2M_RETRY_JITTER_PCT
-#define CONFIG_LWM2M_RETRY_JITTER_PCT 20
 #endif
 
 // Buffer/cache sizes
@@ -129,37 +109,45 @@ static size_t hex_to_bytes(const char *hex, uint8_t *out, size_t out_size) {
     return bytes;
 }
 
-static int compute_retry_delay_s(int attempt) {
-    // attempt is 1-based
-    if (attempt <= 0) {
-        return CONFIG_LWM2M_RETRY_DELAY_S;
+// Build LwM2M Server URI using the Wi‑Fi gateway IP and scheme/port
+static const char *build_server_uri_from_gateway(void) {
+    static char uri[64];
+    const char *cfg_uri = CONFIG_LWM2M_SERVER_URI;
+
+    // Default scheme/port
+    char scheme[6] = "coap"; // "coap" or "coaps"
+    int port = 5683;
+
+    const char *sep = strstr(cfg_uri, "://");
+    const char *hostport = cfg_uri;
+    if (sep) {
+        size_t slen = (size_t) (sep - cfg_uri);
+        if (slen > 0 && slen < sizeof(scheme)) {
+            memcpy(scheme, cfg_uri, slen);
+            scheme[slen] = '\0';
+        }
+        hostport = sep + 3;
     }
-    // Exponential backoff with cap
-    int64_t delay = (int64_t) CONFIG_LWM2M_RETRY_DELAY_S;
-    for (int i = 1; i < attempt; ++i) {
-        delay <<= 1;
-        if (delay >= CONFIG_LWM2M_RETRY_MAX_DELAY_S) {
-            delay = CONFIG_LWM2M_RETRY_MAX_DELAY_S;
-            break;
+    if (strcmp(scheme, "coaps") == 0) {
+        port = 5684;
+    }
+    const char *colon = strchr(hostport, ':');
+    if (colon && colon[1] != '\0') {
+        int p = atoi(colon + 1);
+        if (p > 0 && p < 65536) {
+            port = p;
         }
     }
-    if (delay > CONFIG_LWM2M_RETRY_MAX_DELAY_S) {
-        delay = CONFIG_LWM2M_RETRY_MAX_DELAY_S;
+
+    esp_netif_t *sta = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    esp_netif_ip_info_t ip;
+    if (sta && esp_netif_get_ip_info(sta, &ip) == ESP_OK) {
+        // Use gateway IP as server address
+        snprintf(uri, sizeof(uri), "%s://%d.%d.%d.%d:%d", scheme, IP2STR(&ip.gw), port);
+        return uri;
     }
-    // Apply jitter +/- CONFIG_LWM2M_RETRY_JITTER_PCT%
-    if (CONFIG_LWM2M_RETRY_JITTER_PCT > 0) {
-        uint32_t r = (uint32_t) xTaskGetTickCount();
-        // xorshift mix for better distribution
-        r ^= r << 13; r ^= r >> 17; r ^= r << 5;
-        int jitter_span = (int) (delay * CONFIG_LWM2M_RETRY_JITTER_PCT / 100);
-        int jitter = (int) (r % (uint32_t) (jitter_span * 2 + 1)) - jitter_span;
-        int jittered = (int) delay + jitter;
-        if (jittered < 1) {
-            jittered = 1;
-        }
-        return jittered;
-    }
-    return (int) delay;
+    // Fallback to configured URI if gateway not available
+    return cfg_uri;
 }
 
 static int setup_security(anjay_t *anjay) {
@@ -181,7 +169,7 @@ static int setup_security(anjay_t *anjay) {
     #endif
 #else
     sec.bootstrap_server = false;
-    sec.server_uri = CONFIG_LWM2M_SERVER_URI;
+    sec.server_uri = build_server_uri_from_gateway();
 #endif
 
     // Configure PSK if requested and using coaps
@@ -204,6 +192,7 @@ static int setup_security(anjay_t *anjay) {
     }
 
     anjay_iid_t sec_iid = ANJAY_ID_INVALID;
+    ESP_LOGI(TAG, "Security URI: %s", sec.server_uri ? sec.server_uri : "(null)");
     int result = anjay_security_object_add_instance(anjay, &sec, &sec_iid);
     if (result) {
         ESP_LOGE(TAG, "Failed to add Security instance: %d", result);
@@ -316,57 +305,15 @@ static void lwm2m_client_task(void *arg) {
     #else
     ESP_LOGI(TAG, "Starting Anjay event loop");
     #endif
-
-    // Controlled registration with user-defined timeout and retry policy
-    int attempt = 0;
-    const avs_time_duration_t max_wait = avs_time_duration_from_scalar(250, AVS_TIME_MS);
-
     // Register network event handlers to manage offline/online
     esp_event_handler_instance_t inst_wifi = NULL;
     esp_event_handler_instance_t inst_ip = NULL;
     (void) esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &lwm2m_net_event_handler, anjay, &inst_wifi);
     (void) esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &lwm2m_net_event_handler, anjay, &inst_ip);
-    while (1) {
-        // Wait for ongoing registration to finish or time out
-        const int timeout_s = CONFIG_LWM2M_CONNECT_TIMEOUT_S;
-        avs_time_real_t start = avs_time_real_now();
-        while (anjay_ongoing_registration_exists(anjay)) {
-            (void) anjay_event_loop_run(anjay, max_wait);
-            avs_time_duration_t elapsed = avs_time_real_diff(avs_time_real_now(), start);
-            if (elapsed.seconds >= timeout_s) {
-                ESP_LOGW(TAG, "Register attempt %d timed out after %d s", attempt + 1, timeout_s);
-                break;
-            }
-        }
 
-        if (!anjay_all_connections_failed(anjay) && !anjay_ongoing_registration_exists(anjay)) {
-            // Registered successfully
-            break;
-        }
+    ESP_LOGI(TAG, "Entering LwM2M main loop.");
 
-        // Failed: decide on another attempt
-        attempt++;
-        if (CONFIG_LWM2M_MAX_RETRIES > 0 && attempt >= CONFIG_LWM2M_MAX_RETRIES) {
-            ESP_LOGE(TAG, "Registration failed after %d attempts. Stopping client.", attempt);
-            // Unregister handlers before exit
-            if (inst_wifi) {
-                (void) esp_event_handler_instance_unregister(WIFI_EVENT, ESP_EVENT_ANY_ID, inst_wifi);
-            }
-            if (inst_ip) {
-                (void) esp_event_handler_instance_unregister(IP_EVENT, IP_EVENT_STA_GOT_IP, inst_ip);
-            }
-            goto cleanup;
-        }
-        int delay_s = compute_retry_delay_s(attempt);
-        ESP_LOGW(TAG, "Scheduling retry %d after %ds (base=%ds, cap=%ds, jitter=%d%%)",
-                 attempt, delay_s, (int) CONFIG_LWM2M_RETRY_DELAY_S,
-                 (int) CONFIG_LWM2M_RETRY_MAX_DELAY_S, (int) CONFIG_LWM2M_RETRY_JITTER_PCT);
-        vTaskDelay(pdMS_TO_TICKS(delay_s * 1000));
-        // Trigger reconnect for all transports; this will schedule re-register if needed
-        (void) anjay_transport_schedule_reconnect(anjay, ANJAY_TRANSPORT_SET_ALL);
-    }
-
-    ESP_LOGI(TAG, "LwM2M registered. Entering main loop.");
+    const avs_time_duration_t max_wait = avs_time_duration_from_scalar(250, AVS_TIME_MS);
 
     // Periodically flag temperature as changed (Notify) and Send data
     const int NOTIFY_PERIOD_S = 10; // match attrs.min_period/max_period above
@@ -411,8 +358,6 @@ static void lwm2m_client_task(void *arg) {
 #endif
 
     }
-    
-
 cleanup:
     anjay_delete(anjay);
     vTaskDelete(NULL);

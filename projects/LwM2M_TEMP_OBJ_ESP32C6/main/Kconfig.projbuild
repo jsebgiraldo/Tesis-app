@@ -1,0 +1,236 @@
+menu "WiFi Provisioning Configuration"
+
+    choice PROV_TRANSPORT
+        bool "Provisioning Transport Method"
+        default PROV_TRANSPORT_BLE
+        help
+            Wi-Fi provisioning component offers both BLE and SoftAP transports. Choose one.
+
+        config PROV_TRANSPORT_BLE
+            bool "BLE"
+            select BT_ENABLED
+            depends on !IDF_TARGET_ESP32S2
+
+        config PROV_TRANSPORT_SOFTAP
+            bool "SoftAP"
+    endchoice
+
+    config PROV_SECURITY_VERSION
+        int "Security version (0/1/2)"
+        default 1
+        range 0 2
+        help
+            Security version to be used for the provisioning.
+            0 : No security
+            1 : X25519 key exchange + AES-CTR encryption/decryption + Authentication
+            2 : SRP6a + AES-GCM encryption/decryption
+
+    config PROV_SEC2_DEV_MODE
+        bool "Security 2 dev mode"
+        depends on PROV_SECURITY_VERSION = 2
+        default y
+        help
+            This enables the dev mode for Security 2.
+            Please note that this mode is NOT recommended for production purpose.
+
+    config PROV_SEC2_USERNAME
+        string "Security 2 Username"
+        depends on PROV_SECURITY_VERSION = 2
+        default "wifiprov"
+        help
+            Username for Security 2. This value is used for authentication during provisioning.
+
+    config PROV_SEC2_PASSWORD
+        string "Security 2 Password"
+        depends on PROV_SECURITY_VERSION = 2
+        default "abcd1234"
+        help
+            Password for Security 2. This value is used for authentication during provisioning.
+
+    config PROV_SHOW_QR
+        bool "Show QR code in console"
+        default y
+        help
+            Show QR code for provisioning in console output.
+
+    config PROV_RESET_PROVISIONED
+        bool "Reset provisioned status of the device"
+        default n
+        help
+            This erases the NVS to reset provisioned status of the device on every reboot.
+            Provisioned status is determined by the Wi-Fi STA configuration, saved on the NVS.
+
+    config PROV_REPROVISIONING
+        bool "Enable reprovisioning"
+        default n
+        help
+            This option allows for reprovisioning of the device after it has been provisioned.
+
+    config PROV_FORCE_ON_BOOT
+        bool "Enable force-provisioning button at boot"
+        default y
+        help
+            When enabled, holding a configured GPIO at boot will force a provisioning reset
+            so BLE/SoftAP provisioning becomes visible even if the device was already provisioned.
+
+    config PROV_FORCE_GPIO
+        int "GPIO number for force-provisioning button"
+        depends on PROV_FORCE_ON_BOOT
+        default 9
+        range 0 30
+        help
+            GPIO to read at boot. Typically use the BOOT button (often GPIO9 on ESP32-C6 DevKits).
+
+    config PROV_FORCE_ACTIVE_LOW
+        bool "Force button is active-low"
+        depends on PROV_FORCE_ON_BOOT
+        default y
+        help
+            If enabled, a logic low level on the configured GPIO indicates button pressed.
+
+    config PROV_RESET_PROV_MGR_ON_FAILURE
+        bool "Reset provisioning manager on connection failure"
+        default y
+        help
+            Reset provisioning manager on connection failure.
+
+    config PROV_MGR_CONNECTION_CNT
+        int "Maximum connection attempts"
+        default 3
+        range 1 10
+        help
+            Maximum number of connection attempts to the AP before resetting the provisioning state machine.
+
+endmenu
+
+menu "Board Features"
+
+config BOARD_HAS_WS2812
+    bool "Board has a single WS2812 RGB LED"
+    default y
+
+config BOARD_WS2812_GPIO
+    int "WS2812 data GPIO"
+    depends on BOARD_HAS_WS2812
+    default 8
+    range 0 30
+    help
+        ESP32-C6-DevKitC-1 usa GPIO8 para el LED RGB integrado.
+
+config BOARD_BOOT_BUTTON_GPIO
+    int "Boot/Factory Reset button GPIO"
+    default 9
+    range 0 30
+    help
+        En ESP32-C6 DevKitC-1 el botón BOOT está en GPIO9.
+
+config FACTORY_RESET_HOLD_MS
+    int "Factory reset hold time (ms)"
+    range 1000 60000
+    default 7000
+
+endmenu
+
+menu "LwM2M APP"
+
+config EXAMPLE_WIFI_SSID
+    string "WiFi SSID"
+    default "PCI_S107_LINKSYS"
+
+config EXAMPLE_WIFI_PASSWORD
+    string "WiFi Password"
+    default "banano2025"
+
+config EXAMPLE_MAXIMUM_RETRY
+    int "Maximum WiFi reconnect retries"
+    default 5
+    range 0 100
+
+config LWM2M_ENDPOINT_NAME
+    string "LwM2M Endpoint Name"
+    default "esp32c6-temp"
+
+config LWM2M_SERVER_URI
+    string "LwM2M Server URI (coap(s)://host:port)"
+    default "coap://192.168.137.1:5683"
+
+config LWM2M_BOOTSTRAP
+    bool "Use LwM2M Bootstrap"
+    default n
+
+config LWM2M_BOOTSTRAP_URI
+    string "Bootstrap Server URI (coap(s)://host:port)"
+    depends on LWM2M_BOOTSTRAP
+    default "coap://leshan.eclipseprojects.io:5783"
+
+config LWM2M_SECURITY_PSK_ID
+    string "DTLS PSK Identity (if coaps)"
+    default ""
+
+config LWM2M_SECURITY_PSK_KEY
+    string "DTLS PSK Key (hex)"
+    default ""
+
+config LWM2M_CONNECT_TIMEOUT_S
+    int "Registration attempt timeout (seconds)"
+    default 5
+    range 5 300
+    help
+        Maximum time to wait for a Register/Update attempt to complete before
+        treating it as failed and applying the retry policy.
+
+config LWM2M_START_DELAY_MS
+    int "Startup delay before first register (ms)"
+    default 1000
+    range 0 10000
+    help
+        Wait this long after the LwM2M task starts before creating the client
+        and attempting the first Register. Helps avoid transient network/ARP
+        races on some Wi‑Fi setups.
+
+config LWM2M_RETRY_DELAY_S
+    int "Retry delay after failed registration (seconds)"
+    default 5
+    range 1 300
+
+config LWM2M_MAX_RETRIES
+    int "Max registration retries (0=infinite)"
+    default 0
+    range 0 100
+
+config LWM2M_RETRY_MAX_DELAY_S
+    int "Retry delay cap for exponential backoff (seconds)"
+    default 60
+    range 1 600
+
+config LWM2M_RETRY_JITTER_PCT
+    int "Retry jitter percentage (+/-)"
+    default 20
+    range 0 100
+
+config LWM2M_TASK_STACK_SIZE
+    int "LwM2M task stack size (bytes)"
+    default 8192
+    range 4096 32768
+
+config LWM2M_IN_BUFFER_SIZE
+    int "Anjay in_buffer_size"
+    default 4000
+    range 1024 8192
+
+config LWM2M_OUT_BUFFER_SIZE
+    int "Anjay out_buffer_size"
+    default 4000
+    range 1024 8192
+
+config LWM2M_MSG_CACHE_SIZE
+    int "Anjay msg_cache_size"
+    default 4000
+    range 0 8192
+
+config LWM2M_SEND_ENABLE
+    bool "Enable LwM2M Send (TS 1.1)"
+    default y
+
+
+endmenu
