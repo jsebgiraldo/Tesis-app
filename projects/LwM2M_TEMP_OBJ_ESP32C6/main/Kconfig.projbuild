@@ -173,7 +173,7 @@ config LWM2M_SECURITY_PSK_KEY
 
 config LWM2M_CONNECT_TIMEOUT_S
     int "Registration attempt timeout (seconds)"
-    default 30
+    default 5
     range 5 300
     help
         Maximum time to wait for a Register/Update attempt to complete before
