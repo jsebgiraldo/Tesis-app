@@ -22,3 +22,17 @@
     - Usa IPv4 shared (NAT + DHCP mediante NetworkManager) y desactiva IPv6 en el perfil del AP.
     - Si NetworkManager no está activo: `sudo systemctl enable --now NetworkManager`.
     - En Raspberry Pi OS, asegúrate de que el driver soporta modo AP en wlan0 y que no hay conflicto con otros gestores (wpa_supplicant/dhcpcd).
+
+- Fixes AP nmcli: `fix_ap_nmcli.sh`
+  - Aplica ajustes robustos al perfil del AP de NetworkManager para mejorar compatibilidad con IoT/ESP32:
+    - Fuerza banda 2.4 GHz (bg) y canal (por defecto 6)
+    - WPA2 (RSN) estricto con CCMP (sin TKIP)
+    - PMF opcional (1)
+    - Reaplica la PSK y reinicia la conexión
+  - Uso:
+    ```bash
+    sudo ./fix_ap_nmcli.sh "ap-PI5_AP" "banano2025" 6
+    ```
+  - Notas:
+    - Si el país/regulatory domain limita canales, ajusta CHANNEL a 1 u 11 según corresponda (CRDA/iw reg set <COUNTRY>).
+    - Si la tarjeta soporta 5GHz y lo necesitas, puedes cambiar band a `a` y un canal DFS permitido, pero muchos ESP32 solo operan en 2.4GHz.

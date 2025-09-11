@@ -68,24 +68,37 @@ up_ap() {
     nmcli con modify "$con_name" 802-11-wireless.mode ap
   fi
 
-  # Seguridad WPA2/3 Personal
+  # Seguridad estricta WPA2 (RSN) + CCMP; PMF opcional (1); sin TKIP/WPA
   nmcli con modify "$con_name" \
     802-11-wireless-security.key-mgmt wpa-psk \
+    802-11-wireless-security.proto rsn \
+    802-11-wireless-security.pairwise ccmp \
+    802-11-wireless-security.group ccmp \
+    802-11-wireless-security.pmf 1 \
     802-11-wireless-security.psk "$pass"
 
-  # Banda/canal opcionales
+  # Banda/canal: por defecto 2.4GHz (bg) y canal 6 si no se especifica
   if [ -n "$band" ]; then
     case "$band" in
       2|2.4) nmcli con modify "$con_name" 802-11-wireless.band bg ;;
       5)     nmcli con modify "$con_name" 802-11-wireless.band a  ;;
-      *) echo "[ap] Banda desconocida/no soportada: $band (usa 2 o 5)" ;;
+      *)     echo "[ap] Banda desconocida/no soportada: $band (usa 2 o 5)" ;;
     esac
+  else
+    nmcli con modify "$con_name" 802-11-wireless.band bg
   fi
-  [ -n "$chan" ] && nmcli con modify "$con_name" 802-11-wireless.channel "$chan" || true
+
+  if [ -n "$chan" ]; then
+    nmcli con modify "$con_name" 802-11-wireless.channel "$chan"
+  else
+    nmcli con modify "$con_name" 802-11-wireless.channel 6
+  fi
 
   # IP local (shared) para dar NAT/DHCP mediante NetworkManager
   nmcli con modify "$con_name" ipv4.method shared ipv6.method ignore
 
+  echo "[ap] Reiniciando conexión para aplicar cambios ..."
+  nmcli con down "$con_name" || true
   echo "[ap] Activando AP $ssid en $iface ..."
   nmcli con up "$con_name"
   # Muestra IP asignada por modo compartido

@@ -109,45 +109,9 @@ static size_t hex_to_bytes(const char *hex, uint8_t *out, size_t out_size) {
     return bytes;
 }
 
-// Build LwM2M Server URI using the Wi‑Fi gateway IP and scheme/port
-static const char *build_server_uri_from_gateway(void) {
-    static char uri[64];
-    const char *cfg_uri = CONFIG_LWM2M_SERVER_URI;
-
-    // Default scheme/port
-    char scheme[6] = "coap"; // "coap" or "coaps"
-    int port = 5683;
-
-    const char *sep = strstr(cfg_uri, "://");
-    const char *hostport = cfg_uri;
-    if (sep) {
-        size_t slen = (size_t) (sep - cfg_uri);
-        if (slen > 0 && slen < sizeof(scheme)) {
-            memcpy(scheme, cfg_uri, slen);
-            scheme[slen] = '\0';
-        }
-        hostport = sep + 3;
-    }
-    if (strcmp(scheme, "coaps") == 0) {
-        port = 5684;
-    }
-    const char *colon = strchr(hostport, ':');
-    if (colon && colon[1] != '\0') {
-        int p = atoi(colon + 1);
-        if (p > 0 && p < 65536) {
-            port = p;
-        }
-    }
-
-    esp_netif_t *sta = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
-    esp_netif_ip_info_t ip;
-    if (sta && esp_netif_get_ip_info(sta, &ip) == ESP_OK) {
-        // Use gateway IP as server address
-        snprintf(uri, sizeof(uri), "%s://%d.%d.%d.%d:%d", scheme, IP2STR(&ip.gw), port);
-        return uri;
-    }
-    // Fallback to configured URI if gateway not available
-    return cfg_uri;
+// Use configured LwM2M Server URI directly
+static const char *get_configured_server_uri(void) {
+    return CONFIG_LWM2M_SERVER_URI;
 }
 
 static int setup_security(anjay_t *anjay) {
@@ -169,13 +133,15 @@ static int setup_security(anjay_t *anjay) {
     #endif
 #else
     sec.bootstrap_server = false;
-    sec.server_uri = build_server_uri_from_gateway();
+    sec.server_uri = get_configured_server_uri();
 #endif
 
     // Configure PSK if requested and using coaps
     const char *uri = sec.server_uri;
     bool uri_secure = (uri && strncmp(uri, "coaps", 5) == 0);
-    const char *psk_id = CONFIG_LWM2M_SECURITY_PSK_ID;
+    const char *psk_id = (CONFIG_LWM2M_SECURITY_PSK_ID[0] != '\0')
+                                 ? CONFIG_LWM2M_SECURITY_PSK_ID
+                                 : CONFIG_LWM2M_ENDPOINT_NAME; // Default to endpoint name (ThingsBoard convention)
     const char *psk_key_hex = CONFIG_LWM2M_SECURITY_PSK_KEY;
     if (uri_secure && psk_id && psk_key_hex && psk_id[0] != '\0' && psk_key_hex[0] != '\0') {
         uint8_t key_buf[64];

@@ -152,7 +152,12 @@ config LWM2M_ENDPOINT_NAME
 
 config LWM2M_SERVER_URI
     string "LwM2M Server URI (coap(s)://host:port)"
-    default "coap://192.168.137.1:5683"
+        default "coap://192.168.137.1:5683"
+        help
+                URI of your LwM2M Server. For ThingsBoard, typical defaults are:
+                    - coaps://<host>:5686 (DTLS/PSK)
+                    - coap://<host>:5685  (NoSec)
+                Use the host/port configured in your ThingsBoard LwM2M Transport settings.
 
 config LWM2M_BOOTSTRAP
     bool "Use LwM2M Bootstrap"
@@ -166,10 +171,17 @@ config LWM2M_BOOTSTRAP_URI
 config LWM2M_SECURITY_PSK_ID
     string "DTLS PSK Identity (if coaps)"
     default ""
+    help
+        PSK identity for DTLS. Leave empty to use LwM2M Endpoint Name as identity
+        (common ThingsBoard convention). Only used if LWM2M_SERVER_URI starts with coaps://.
 
 config LWM2M_SECURITY_PSK_KEY
     string "DTLS PSK Key (hex)"
     default ""
+    help
+        PSK key in hex, without 0x or spaces. Example: 00112233aabbccddeeff.
+        Obtain from ThingsBoard device credentials. Only used if LWM2M_SERVER_URI
+        starts with coaps://.
 
 config LWM2M_CONNECT_TIMEOUT_S
     int "Registration attempt timeout (seconds)"
