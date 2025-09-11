@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
+# Auto-elevate if not root for docker access
+if [ "${EUID:-$(id -u)}" -ne 0 ]; then
+  exec sudo -E "$0" "$@"
+fi
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)
 cd "$SCRIPT_DIR"
 

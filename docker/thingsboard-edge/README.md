@@ -66,7 +66,7 @@ Variables principales (en `.env`):
 
 Variables de base de datos (puedes dejar valores por defecto):
 - Edge: `POSTGRES_DB=tb-edge`, `POSTGRES_PASSWORD=postgres`.
-- Server: `TB_SERVER_POSTGRES_PASSWORD=postgres`.
+- Server: `SPRING_DATASOURCE_PASSWORD=postgres`.
 
 Colas/Queues: por defecto Edge usa cola en memoria (válida para desarrollo). Para producción considera Kafka (no incluido aquí por simplicidad; se puede extender al estilo de `docker/thingsboard`).
 

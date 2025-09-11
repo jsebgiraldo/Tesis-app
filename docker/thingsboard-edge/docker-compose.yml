@@ -29,6 +29,8 @@ services:
         max-file: "10"
     environment:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/tb-edge
+      SPRING_DATASOURCE_USERNAME: postgres
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
       CLOUD_ROUTING_KEY: ${CLOUD_ROUTING_KEY:?CLOUD_ROUTING_KEY is required}
       CLOUD_ROUTING_SECRET: ${CLOUD_ROUTING_SECRET:?CLOUD_ROUTING_SECRET is required}
       # Por defecto usa el servidor local dentro del mismo compose
