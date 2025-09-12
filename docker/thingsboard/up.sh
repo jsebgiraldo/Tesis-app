@@ -10,6 +10,6 @@ mkdir -p "$REPO_DIR/data/thingsboard/postgres" "$REPO_DIR/data/thingsboard/logs"
 echo "Starting ThingsBoard CE stack (Postgres + Kafka + tb-node) ..."
 cd "$SCRIPT_DIR"
 docker compose up -d
-echo "REST/API (and UI if present): http://localhost:8080"
+echo "REST/API (and UI if present): http://localhost:18080"
 echo "Kafka (host): localhost:9092"
 

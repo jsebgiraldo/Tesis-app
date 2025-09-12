@@ -24,7 +24,7 @@ LOAD_DEMO=true ./install.sh   # esquema + datos demo
 ./logs.sh
 ```
 
-Luego abre `http://localhost:8080`.
+Luego abre `http://localhost:18080` (el contenedor expone `8080` como `18080` en el host).
 - Si ves la UI de ThingsBoard, inicia sesión con:
    - System Administrator: sysadmin@thingsboard.org / sysadmin
    - Tenant Administrator: tenant@thingsboard.org / tenant
@@ -32,7 +32,11 @@ Luego abre `http://localhost:8080`.
 - Si no carga la UI (solo REST API), instala/añade el servicio `tb-web-ui` según la guía oficial.
 
 ## Puertos expuestos
-- 8080: REST API (y UI si `tb-web-ui` está embebido o habilitado)
+- 18080->8080: REST API (y UI si `tb-web-ui` está embebido o habilitado)
+- 17070->7070: gRPC de transporte interno (si corresponde)
+- 11883->1883: MQTT (si está habilitado en tb-node)
+- 18883->8883: MQTTs (si está habilitado en tb-node)
+- 15683-15688->5683-5688/udp: CoAP/LwM2M (si están habilitados)
 - 9092: Kafka (PLAINTEXT dentro de Docker y expuesto al host en el mismo puerto)
 - 5432: Postgres (si necesitas conectarte desde el host)
 
