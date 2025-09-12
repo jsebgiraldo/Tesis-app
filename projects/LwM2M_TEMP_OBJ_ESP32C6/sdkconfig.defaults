@@ -54,3 +54,19 @@ CONFIG_LWM2M_CONNECT_TIMEOUT_S=5
 CONFIG_LWM2M_RETRY_DELAY_S=5
 CONFIG_LWM2M_RETRY_MAX_DELAY_S=5
 CONFIG_LWM2M_RETRY_JITTER_PCT=0
+
+# --- Project defaults to work with local ThingsBoard Edge ---
+# Wi‑Fi AP created by tools/wifi_ap_nmcli.sh
+CONFIG_EXAMPLE_WIFI_SSID="PI5_AP"
+CONFIG_EXAMPLE_WIFI_PASSWORD="banano2025"
+
+# LwM2M over CoAP (NOSEC) to Edge on host's UDP mapped port 15683
+# If your host IP differs from AP gateway (10.42.0.1), change it accordingly.
+CONFIG_LWM2M_SERVER_URI="coap://10.42.0.1:15683"
+
+# Endpoint name (device ID). You can override in menuconfig.
+CONFIG_LWM2M_ENDPOINT_NAME="esp32c6-temp"
+
+# No bootstrap by default when targeting ThingsBoard directly.
+# CONFIG_LWM2M_BOOTSTRAP is not set
+

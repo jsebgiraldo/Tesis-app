@@ -19,9 +19,9 @@ services:
     restart: always
     image: "thingsboard/tb-edge:4.2.0EDGE"
     ports:
-      - "18080:8080"
-      - "11883:1883"
-      - "15683-15688:5683-5688/udp"
+      - "8080:8080"
+      - "1883:1883"
+      - "5683-5688:5683-5688/udp"
     logging:
       driver: "json-file"
       options:
@@ -33,52 +33,14 @@ services:
       SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
       CLOUD_ROUTING_KEY: ${CLOUD_ROUTING_KEY:?CLOUD_ROUTING_KEY is required}
       CLOUD_ROUTING_SECRET: ${CLOUD_ROUTING_SECRET:?CLOUD_ROUTING_SECRET is required}
-      # Por defecto usa el servidor local dentro del mismo compose
-      CLOUD_RPC_HOST: ${CLOUD_RPC_HOST:-tb-server}
+      # Host/IP del ThingsBoard Server remoto (ajústalo en tu .env o al correr)
+      # Ejemplo: CLOUD_RPC_HOST=192.168.1.50
+      CLOUD_RPC_HOST: ${CLOUD_RPC_HOST:?CLOUD_RPC_HOST is required}
     volumes:
       - data:/data
       - logs:/var/log/tb-edge
     depends_on:
       postgres:
-        condition: service_healthy
-      tb-server:
-        condition: service_started
-
-  # Postgres para Server (ThingsBoard CE)
-  tb-server-postgres:
-    restart: always
-    image: "postgres:16"
-    environment:
-      POSTGRES_DB: thingsboard
-      POSTGRES_PASSWORD: ${TB_SERVER_POSTGRES_PASSWORD:-postgres}
-    volumes:
-      - tb-server-postgres-data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d thingsboard"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-
-  # ThingsBoard Server (CE, monolítico)
-  tb-server:
-    restart: always
-    image: "thingsboard/tb-node:4.2.0"
-    # Exponemos solo la UI hacia el host para administración
-    ports:
-      - "8081:8080"   # UI local del Server CE
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "100m"
-        max-file: "10"
-    environment:
-      TB_SERVICE_ID: tb-ce-node
-      SPRING_DATASOURCE_URL: jdbc:postgresql://tb-server-postgres:5432/thingsboard
-      SPRING_DATASOURCE_USERNAME: postgres
-      SPRING_DATASOURCE_PASSWORD: ${TB_SERVER_POSTGRES_PASSWORD:-postgres}
-      EDGES_ENABLED: "true"   # habilita funcionalidad Edge en el server local
-    depends_on:
-      tb-server-postgres:
         condition: service_healthy
 
 volumes:
@@ -88,5 +50,3 @@ volumes:
     name: tb-edge-logs
   postgres-data:
     name: tb-edge-postgres-data
-  tb-server-postgres-data:
-    name: tb-server-postgres-data

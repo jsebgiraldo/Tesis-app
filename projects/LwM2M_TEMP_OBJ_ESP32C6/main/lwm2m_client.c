@@ -6,7 +6,6 @@
 #include "esp_event.h"
 #include "esp_system.h"
 #include "esp_wifi.h"
-#include "esp_netif.h"
 #include <string.h>
 #include <stdlib.h>
 #include "temp_object.h"
@@ -109,8 +108,8 @@ static size_t hex_to_bytes(const char *hex, uint8_t *out, size_t out_size) {
     return bytes;
 }
 
-// Use configured LwM2M Server URI directly
-static const char *get_configured_server_uri(void) {
+// Use LwM2M Server URI from Kconfig directly (ThingsBoard Edge or Server)
+static const char *get_server_uri(void) {
     return CONFIG_LWM2M_SERVER_URI;
 }
 
@@ -133,7 +132,7 @@ static int setup_security(anjay_t *anjay) {
     #endif
 #else
     sec.bootstrap_server = false;
-    sec.server_uri = get_configured_server_uri();
+    sec.server_uri = get_server_uri();
 #endif
 
     // Configure PSK if requested and using coaps

@@ -27,6 +27,6 @@ docker compose pull
 echo "[tb-edge] Levantando ThingsBoard Edge (Postgres + tb-edge) ..."
 docker compose up -d
 
-echo "UI:   http://localhost:18080"
-echo "MQTT: localhost:11883"
-echo "CoAP: UDP 15683-15688"
+echo "UI:   http://localhost:8080"
+echo "MQTT: localhost:1883"
+echo "CoAP: UDP 5683-5688"
