@@ -15,3 +15,6 @@ __pycache__/
 **/build/
 **/sdkconfig
 **/sdkconfig.old
+
+# Secrets / env files
+docker/**/.env
