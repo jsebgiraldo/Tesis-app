@@ -54,3 +54,19 @@ CONFIG_LWM2M_CONNECT_TIMEOUT_S=5
 CONFIG_LWM2M_RETRY_DELAY_S=5
 CONFIG_LWM2M_RETRY_MAX_DELAY_S=5
 CONFIG_LWM2M_RETRY_JITTER_PCT=0
+
+#
+# TLS/DTLS (Mbed TLS) configuration for Anjay/CoAP
+# Keep DTLS disabled since the project uses coap:// (no security).
+# If you later switch to coaps://, enable DTLS in menuconfig or set
+# CONFIG_MBEDTLS_SSL_PROTO_DTLS=y here and adjust PSK/certs accordingly.
+#
+CONFIG_MBEDTLS_SSL_PROTO_TLS1_2=y
+CONFIG_MBEDTLS_SSL_PROTO_DTLS=n
+CONFIG_MBEDTLS_SSL_ALPN=y
+# Keep peer certificate for potential post-handshake validation (safe default)
+CONFIG_MBEDTLS_SSL_KEEP_PEER_CERTIFICATE=y
+
+# WPA supplicant uses mbedTLS as TLS backend for EAP/TLS features
+CONFIG_WPA_MBEDTLS_CRYPTO=y
+CONFIG_WPA_MBEDTLS_TLS_CLIENT=y
