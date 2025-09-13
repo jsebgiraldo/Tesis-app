@@ -23,3 +23,15 @@ docker run --rm -it \
 
 ## Notas
 - Para Thread se compila con componentes OpenThread de ESP-IDF (ESP32-H2/H4). Requiere hardware compatible.
+
+## Limpieza de todos los stacks Docker
+Puedes detener y borrar los volúmenes de todos los stacks bajo `docker/*` con:
+
+```bash
+cd docker
+bash clean-all.sh
+```
+
+Flags útiles:
+- `--yes` omite confirmaciones
+- `--prune-system` hace también `docker system prune -a --volumes` (cuidado, borra imágenes/redes no usadas)

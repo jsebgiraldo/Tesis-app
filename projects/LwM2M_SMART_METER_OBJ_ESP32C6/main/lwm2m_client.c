@@ -1,4 +1,4 @@
-// Minimal Anjay client with client-initiated bootstrap and Temperature 3303
+// Minimal Anjay client with client-initiated bootstrap and Single-Phase Power Meter (OID 10243)
 #include "sdkconfig.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -6,9 +6,10 @@
 #include "esp_event.h"
 #include "esp_system.h"
 #include "esp_wifi.h"
+#include "esp_netif.h"
 #include <string.h>
 #include <stdlib.h>
-#include "temp_object.h"
+#include "smart_meter_object.h"
 
 #include <anjay/anjay.h>
 #include <anjay/security.h>
@@ -108,9 +109,45 @@ static size_t hex_to_bytes(const char *hex, uint8_t *out, size_t out_size) {
     return bytes;
 }
 
-// Use LwM2M Server URI from Kconfig directly (ThingsBoard Edge or Server)
-static const char *get_server_uri(void) {
-    return CONFIG_LWM2M_SERVER_URI;
+// Build LwM2M Server URI using the Wi‑Fi gateway IP and scheme/port
+static const char *build_server_uri_from_gateway(void) {
+    static char uri[64];
+    const char *cfg_uri = CONFIG_LWM2M_SERVER_URI;
+
+    // Default scheme/port
+    char scheme[6] = "coap"; // "coap" or "coaps"
+    int port = 5683;
+
+    const char *sep = strstr(cfg_uri, "://");
+    const char *hostport = cfg_uri;
+    if (sep) {
+        size_t slen = (size_t) (sep - cfg_uri);
+        if (slen > 0 && slen < sizeof(scheme)) {
+            memcpy(scheme, cfg_uri, slen);
+            scheme[slen] = '\0';
+        }
+        hostport = sep + 3;
+    }
+    if (strcmp(scheme, "coaps") == 0) {
+        port = 5684;
+    }
+    const char *colon = strchr(hostport, ':');
+    if (colon && colon[1] != '\0') {
+        int p = atoi(colon + 1);
+        if (p > 0 && p < 65536) {
+            port = p;
+        }
+    }
+
+    esp_netif_t *sta = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    esp_netif_ip_info_t ip;
+    if (sta && esp_netif_get_ip_info(sta, &ip) == ESP_OK) {
+        // Use gateway IP as server address
+        snprintf(uri, sizeof(uri), "%s://%d.%d.%d.%d:%d", scheme, IP2STR(&ip.gw), port);
+        return uri;
+    }
+    // Fallback to configured URI if gateway not available
+    return cfg_uri;
 }
 
 static int setup_security(anjay_t *anjay) {
@@ -132,15 +169,13 @@ static int setup_security(anjay_t *anjay) {
     #endif
 #else
     sec.bootstrap_server = false;
-    sec.server_uri = get_server_uri();
+    sec.server_uri = build_server_uri_from_gateway();
 #endif
 
     // Configure PSK if requested and using coaps
     const char *uri = sec.server_uri;
     bool uri_secure = (uri && strncmp(uri, "coaps", 5) == 0);
-    const char *psk_id = (CONFIG_LWM2M_SECURITY_PSK_ID[0] != '\0')
-                                 ? CONFIG_LWM2M_SECURITY_PSK_ID
-                                 : CONFIG_LWM2M_ENDPOINT_NAME; // Default to endpoint name (ThingsBoard convention)
+    const char *psk_id = CONFIG_LWM2M_SECURITY_PSK_ID;
     const char *psk_key_hex = CONFIG_LWM2M_SECURITY_PSK_KEY;
     if (uri_secure && psk_id && psk_key_hex && psk_id[0] != '\0' && psk_key_hex[0] != '\0') {
         uint8_t key_buf[64];
@@ -243,24 +278,24 @@ static void lwm2m_client_task(void *arg) {
         goto cleanup;
     }
 
-    if (anjay_register_object(anjay, temp_object_def())) {
-        ESP_LOGE(TAG, "Could not register 3303 object");
+    if (anjay_register_object(anjay, smart_meter_object_def())) {
+        ESP_LOGE(TAG, "Could not register 10243 object");
         goto cleanup;
     }
 
 #ifdef ANJAY_WITH_ATTR_STORAGE
-    // Set pmin/pmax only for Temperature object (OID 3303), instance 0
+    // Set pmin/pmax for Power Meter object (OID 10243), instance 0
     {
-        const anjay_oid_t OID_TEMP = 3303;
+        const anjay_oid_t OID_SM = 10243;
         const anjay_iid_t IID0 = 0;
         anjay_dm_oi_attributes_t attrs = ANJAY_DM_OI_ATTRIBUTES_EMPTY;
-    attrs.min_period = 10;  // notify no more often than every 10s
-    attrs.max_period = 10;  // force at least one notify every 10s
-    int r = anjay_attr_storage_set_instance_attrs(anjay, APP_SERVER_SSID, OID_TEMP, IID0, &attrs);
+        attrs.min_period = 10;  // notify no more often than every 10s
+        attrs.max_period = 10;  // force at least one notify every 10s
+        int r = anjay_attr_storage_set_instance_attrs(anjay, APP_SERVER_SSID, OID_SM, IID0, &attrs);
         if (r) {
-            ESP_LOGW(TAG, "Failed to set attrs for 3303/0 (r=%d)", r);
+            ESP_LOGW(TAG, "Failed to set attrs for 10243/0 (r=%d)", r);
         } else {
-            ESP_LOGI(TAG, "Set pmin=%d, pmax=%d for 3303/0", (int) attrs.min_period, (int) attrs.max_period);
+            ESP_LOGI(TAG, "Set pmin=%d, pmax=%d for 10243/0", (int) attrs.min_period, (int) attrs.max_period);
         }
     }
 #endif // ANJAY_WITH_ATTR_STORAGE
@@ -280,7 +315,7 @@ static void lwm2m_client_task(void *arg) {
 
     const avs_time_duration_t max_wait = avs_time_duration_from_scalar(250, AVS_TIME_MS);
 
-    // Periodically flag temperature as changed (Notify) and Send data
+    // Periodically flag meter values as changed (Notify) and Send data
     const int NOTIFY_PERIOD_S = 10; // match attrs.min_period/max_period above
     const int SEND_PERIOD_S = 5;    // independent Send to compare with Notify
     TickType_t last_notify_tick = xTaskGetTickCount();
@@ -293,9 +328,9 @@ static void lwm2m_client_task(void *arg) {
         // Notify path: mark resource changed every NOTIFY_PERIOD_S
         if ((now - last_notify_tick) >= pdMS_TO_TICKS(NOTIFY_PERIOD_S * 1000)) {
             last_notify_tick = now;
-            // Mark 3303/0/5700 as changed; Anjay enforces pmin/pmax and sends only if observed
-            (void) anjay_notify_changed(anjay, 3303, 0, 5700);
-            ESP_LOGI(TAG, "Temperature changed (Notify)");
+            // Mark 10243/0/4 (Voltage) as changed; Anjay enforces pmin/pmax and sends only if observed
+            (void) anjay_notify_changed(anjay, 10243, 0, 4);
+            ESP_LOGI(TAG, "Power meter voltage changed (Notify)");
         }
 
         // Send path: push current values every SEND_PERIOD_S
@@ -304,11 +339,12 @@ static void lwm2m_client_task(void *arg) {
             last_send_tick = now;
             anjay_send_batch_builder_t *b = anjay_send_batch_builder_new();
             if (b) {
-                (void) anjay_send_batch_data_add_current(b, anjay, 3303, 0, 5700);
-                (void) anjay_send_batch_data_add_current(b, anjay, 3303, 0, 5701);
+                (void) anjay_send_batch_data_add_current(b, anjay, 10243, 0, 4);  // Voltage
+                (void) anjay_send_batch_data_add_current(b, anjay, 10243, 0, 5);  // Current
+                (void) anjay_send_batch_data_add_current(b, anjay, 10243, 0, 6);  // Active Power
                 anjay_send_batch_t *batch = anjay_send_batch_builder_compile(&b);
                 if (batch) {
-                    ESP_LOGI(TAG, "Queueing LwM2M Send for 3303/0/5700,5701");
+                    ESP_LOGI(TAG, "Queueing LwM2M Send for 10243/0/4,5,6");
                     int sret = anjay_send_deferrable(anjay, APP_SERVER_SSID, batch, send_finished_cb, NULL);
                     if (sret != ANJAY_SEND_OK) {
                         ESP_LOGW(TAG, "Send queue returned %d (muted/offline/bootstrap/protocol?)", sret);
@@ -317,7 +353,7 @@ static void lwm2m_client_task(void *arg) {
                 } else {
                     anjay_send_batch_builder_cleanup(&b);
                 }
-                ESP_LOGI(TAG, "Temperature sent (Send)");
+                ESP_LOGI(TAG, "Meter values sent (Send)");
             }
         }
 #endif

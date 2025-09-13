@@ -1,0 +1,52 @@
+services:
+  # Postgres para Edge
+  postgres:
+    restart: always
+    image: "postgres:16"
+    environment:
+      POSTGRES_DB: tb-edge
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d tb-edge"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # ThingsBoard Edge
+  tb-edge:
+    restart: always
+    image: "thingsboard/tb-edge:4.2.0EDGE"
+    ports:
+      - "8080:8080"
+      - "1883:1883"
+      - "5683-5688:5683-5688/udp"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "10"
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/tb-edge
+      SPRING_DATASOURCE_USERNAME: postgres
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      CLOUD_ROUTING_KEY: ${CLOUD_ROUTING_KEY:?CLOUD_ROUTING_KEY is required}
+      CLOUD_ROUTING_SECRET: ${CLOUD_ROUTING_SECRET:?CLOUD_ROUTING_SECRET is required}
+      # Host/IP del ThingsBoard Server remoto (ajústalo en tu .env o al correr)
+      # Ejemplo: CLOUD_RPC_HOST=192.168.1.50
+      CLOUD_RPC_HOST: ${CLOUD_RPC_HOST:?CLOUD_RPC_HOST is required}
+    volumes:
+      - data:/data
+      - logs:/var/log/tb-edge
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  data:
+    name: tb-edge-data
+  logs:
+    name: tb-edge-logs
+  postgres-data:
+    name: tb-edge-postgres-data
