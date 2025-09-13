@@ -70,7 +70,7 @@ services:
       UWSGI_THREADS: ${UWSGI_THREADS:-2}
       UWSGI_LISTEN: ${UWSGI_LISTEN:-128}
     volumes:
-      - ./custom_settings/custom_django_settings.py:/opt/openwisp/openwisp/configuration/custom_django_settings.py:ro
+      - ./custom_settings_rw/custom_django_settings.py:/opt/openwisp/openwisp/configuration/custom_django_settings.py:ro
       - ow_static:/opt/openwisp/static
       - ow_media:/opt/openwisp/media
       - ow_private:/opt/openwisp/private
@@ -116,7 +116,7 @@ services:
       UWSGI_THREADS: ${UWSGI_THREADS:-2}
       UWSGI_LISTEN: ${UWSGI_LISTEN:-128}
     volumes:
-      - ./custom_settings/custom_django_settings.py:/opt/openwisp/openwisp/configuration/custom_django_settings.py:ro
+      - ./custom_settings_rw/custom_django_settings.py:/opt/openwisp/openwisp/configuration/custom_django_settings.py:ro
       - ow_media:/opt/openwisp/media
       - ow_private:/opt/openwisp/private
     depends_on:
@@ -189,7 +189,7 @@ services:
       CELERY_WORKER_LOG_FORMAT: "[%(asctime)s: %(levelname)s/%(processName)s] %(message)s"
       CELERY_WORKER_TASK_LOG_FORMAT: "[%(asctime)s: %(levelname)s/%(processName)s] Task %(task_name)s[%(task_id)s]: %(message)s"
     volumes:
-      - ./custom_settings/custom_django_settings.py:/opt/openwisp/openwisp/configuration/custom_django_settings.py:ro
+      - ./custom_settings_rw/custom_django_settings.py:/opt/openwisp/openwisp/configuration/custom_django_settings.py:ro
       - ow_media:/opt/openwisp/media
       - ow_private:/opt/openwisp/private
     depends_on:
