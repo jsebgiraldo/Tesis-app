@@ -150,14 +150,44 @@ config LWM2M_ENDPOINT_NAME
     string "LwM2M Endpoint Name"
     default "esp32c6-temp"
 
-config LWM2M_SERVER_URI
-    string "LwM2M Server URI (coap(s)://host:port)"
-        default "coap://192.168.137.1:5683"
-        help
-                URI of your LwM2M Server. For ThingsBoard, typical defaults are:
-                    - coaps://<host>:5686 (DTLS/PSK)
-                    - coap://<host>:5685  (NoSec)
-                Use the host/port configured in your ThingsBoard LwM2M Transport settings.
+choice LWM2M_SERVER_SCHEME
+    prompt "LwM2M Server Scheme"
+    default LWM2M_SERVER_SCHEME_COAP
+    help
+        Select the transport scheme for LwM2M.
+
+    config LWM2M_SERVER_SCHEME_COAP
+        bool "coap (NoSec)"
+
+    config LWM2M_SERVER_SCHEME_COAPS
+        bool "coaps (DTLS/PSK)"
+endchoice
+
+config LWM2M_SERVER_PORT
+    int "LwM2M Server Port"
+    default 5685 if LWM2M_SERVER_SCHEME_COAP
+    default 5686 if LWM2M_SERVER_SCHEME_COAPS
+    range 1 65535
+    help
+        UDP port of your LwM2M Server. Defaults follow ThingsBoard convention:
+          - 5685 for coap (NoSec)
+          - 5686 for coaps (DTLS/PSK)
+
+config LWM2M_OVERRIDE_HOSTNAME_ENABLE
+    bool "Resolve server host from a hostname"
+    default y
+    help
+        If enabled, the server host will be determined at runtime by resolving
+        LWM2M_OVERRIDE_HOSTNAME to an IPv4 address and using that IP in the final URI.
+        The scheme and port are taken from the selected options (LwM2M Server Scheme/Port).
+
+config LWM2M_OVERRIDE_HOSTNAME
+    string "Hostname to resolve for LwM2M server"
+    depends on LWM2M_OVERRIDE_HOSTNAME_ENABLE
+    default "thingsboard.edge.play"
+    help
+        Hostname that will be resolved on startup and used as the server IP.
+        Example: thingsboard.edge.play
 
 config LWM2M_BOOTSTRAP
     bool "Use LwM2M Bootstrap"
@@ -173,15 +203,15 @@ config LWM2M_SECURITY_PSK_ID
     default ""
     help
         PSK identity for DTLS. Leave empty to use LwM2M Endpoint Name as identity
-        (common ThingsBoard convention). Only used if LWM2M_SERVER_URI starts with coaps://.
+        (common ThingsBoard convention). Only used if LwM2M Server Scheme is set to coaps.
 
 config LWM2M_SECURITY_PSK_KEY
     string "DTLS PSK Key (hex)"
     default ""
     help
         PSK key in hex, without 0x or spaces. Example: 00112233aabbccddeeff.
-        Obtain from ThingsBoard device credentials. Only used if LWM2M_SERVER_URI
-        starts with coaps://.
+        Obtain from ThingsBoard device credentials. Only used if LwM2M Server Scheme
+        is set to coaps.
 
 config LWM2M_CONNECT_TIMEOUT_S
     int "Registration attempt timeout (seconds)"
