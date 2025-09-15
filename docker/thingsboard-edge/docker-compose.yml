@@ -18,6 +18,7 @@ services:
   tb-edge:
     restart: always
     image: "thingsboard/tb-edge:4.2.0EDGE"
+    hostname: thingsboard.edge.play
     ports:
       - "8080:8080"
       - "1883:1883"
@@ -36,6 +37,8 @@ services:
       # Host/IP del ThingsBoard Server remoto (ajústalo en tu .env o al correr)
       # Ejemplo: CLOUD_RPC_HOST=192.168.1.50
       CLOUD_RPC_HOST: ${CLOUD_RPC_HOST:?CLOUD_RPC_HOST is required}
+      # Deshabilita SNMP en Edge para evitar fallos de arranque si no lo necesitas
+      TRANSPORT_SNMP_ENABLED: ${TRANSPORT_SNMP_ENABLED:-false}
     volumes:
       - data:/data
       - logs:/var/log/tb-edge
