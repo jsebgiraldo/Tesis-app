@@ -39,6 +39,12 @@ services:
       CLOUD_RPC_HOST: ${CLOUD_RPC_HOST:?CLOUD_RPC_HOST is required}
       # Deshabilita SNMP en Edge para evitar fallos de arranque si no lo necesitas
       TRANSPORT_SNMP_ENABLED: ${TRANSPORT_SNMP_ENABLED:-false}
+            # Habilitar transporte LwM2M y servidor de Bootstrap
+      TB_TRANSPORT_LWM2M_ENABLED: "true"              # transport.lwm2m.enabled
+      TB_TRANSPORT_LWM2M_BOOTSTRAP_ENABLED: "true"    # transport.lwm2m.bootstrap.enabled
+      # Puertos de enlace (coinciden con los mapeos UDP de arriba)
+      TB_TRANSPORT_LWM2M_SERVER_BIND_PORT: "5685"     # transport.lwm2m.server.bind_port
+      TB_TRANSPORT_LWM2M_BOOTSTRAP_BIND_PORT: "5687"
     volumes:
       - data:/data
       - logs:/var/log/tb-edge
