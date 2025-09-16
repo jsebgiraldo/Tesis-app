@@ -1,13 +1,14 @@
-#include "temp_object.h"
+#include "humidity_object.h"
 
 #include <math.h>
 #include <stdbool.h>
-#include <string.h>
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
-#define OID_TEMPERATURE 3303
+#include <anjay/io.h>
+
+#define OID_HUMIDITY 3304
 #define IID_DEFAULT 0
 #define RID_SENSOR_VALUE 5700
 #define RID_SENSOR_UNITS 5701
@@ -15,14 +16,14 @@
 #define RID_MAX_MEASURED 5602
 #define RID_RESET_MIN_MAX 5605
 
-#define TEMP_NOTIFY_MIN_INTERVAL_MS 15000
-#define TEMP_NOTIFY_MIN_DELTA_C 0.2f
+#define HUM_NOTIFY_MIN_INTERVAL_MS 20000
+#define HUM_NOTIFY_MIN_DELTA_PCT 1.0f
 
-static float read_temperature_sensor(void) {
+static float read_humidity_sensor(void) {
     TickType_t ticks = xTaskGetTickCount();
-    float base = 25.0f;
-    float phase = (float) (ticks % 16384) / 512.0f;
-    float delta = 2.5f * sinf(phase);
+    float base = 55.0f;
+    float phase = (float) (ticks % 20000) / 700.0f;
+    float delta = 10.0f * sinf(phase);
     return base + delta;
 }
 
@@ -61,24 +62,24 @@ static bool record_sample(float value, bool *min_changed, bool *max_changed) {
 
 static void ensure_sample(void) {
     if (!g_have_value) {
-        (void) record_sample(read_temperature_sensor(), NULL, NULL);
+        (void) record_sample(read_humidity_sensor(), NULL, NULL);
         g_last_notified = g_current_value;
         g_last_notify_tick = xTaskGetTickCount();
     }
 }
 
-static int temp_list_instances(anjay_t *anjay,
-                               const anjay_dm_object_def_t *const *def,
-                               anjay_dm_list_ctx_t *ctx) {
+static int hum_list_instances(anjay_t *anjay,
+                              const anjay_dm_object_def_t *const *def,
+                              anjay_dm_list_ctx_t *ctx) {
     (void) anjay; (void) def;
     anjay_dm_emit(ctx, IID_DEFAULT);
     return 0;
 }
 
-static int temp_list_resources(anjay_t *anjay,
-                               const anjay_dm_object_def_t *const *def,
-                               anjay_iid_t iid,
-                               anjay_dm_resource_list_ctx_t *ctx) {
+static int hum_list_resources(anjay_t *anjay,
+                              const anjay_dm_object_def_t *const *def,
+                              anjay_iid_t iid,
+                              anjay_dm_resource_list_ctx_t *ctx) {
     (void) anjay; (void) def; (void) iid;
     anjay_dm_emit_res(ctx, RID_MIN_MEASURED, ANJAY_DM_RES_R, ANJAY_DM_RES_PRESENT);
     anjay_dm_emit_res(ctx, RID_MAX_MEASURED, ANJAY_DM_RES_R, ANJAY_DM_RES_PRESENT);
@@ -88,19 +89,19 @@ static int temp_list_resources(anjay_t *anjay,
     return 0;
 }
 
-static int temp_read(anjay_t *anjay,
-                     const anjay_dm_object_def_t *const *def,
-                     anjay_iid_t iid,
-                     anjay_rid_t rid,
-                     anjay_riid_t riid,
-                     anjay_output_ctx_t *ctx) {
+static int hum_read(anjay_t *anjay,
+                    const anjay_dm_object_def_t *const *def,
+                    anjay_iid_t iid,
+                    anjay_rid_t rid,
+                    anjay_riid_t riid,
+                    anjay_output_ctx_t *ctx) {
     (void) anjay; (void) def; (void) iid; (void) riid;
     ensure_sample();
     switch (rid) {
     case RID_SENSOR_VALUE:
         return anjay_ret_float(ctx, g_current_value);
     case RID_SENSOR_UNITS:
-        return anjay_ret_string(ctx, "Cel");
+        return anjay_ret_string(ctx, "%RH");
     case RID_MIN_MEASURED:
         return anjay_ret_float(ctx, g_min_measured);
     case RID_MAX_MEASURED:
@@ -110,22 +111,22 @@ static int temp_read(anjay_t *anjay,
     }
 }
 
-static int temp_execute(anjay_t *anjay,
-                        const anjay_dm_object_def_t *const *def,
-                        anjay_iid_t iid,
-                        anjay_rid_t rid,
-                        anjay_execute_ctx_t *arg_ctx) {
+static int hum_execute(anjay_t *anjay,
+                       const anjay_dm_object_def_t *const *def,
+                       anjay_iid_t iid,
+                       anjay_rid_t rid,
+                       anjay_execute_ctx_t *arg_ctx) {
     (void) def; (void) iid; (void) arg_ctx;
     switch (rid) {
     case RID_RESET_MIN_MAX: {
-        float value = read_temperature_sensor();
+        float value = read_humidity_sensor();
         g_have_value = false;
         (void) record_sample(value, NULL, NULL);
         g_last_notified = value;
         g_last_notify_tick = xTaskGetTickCount();
-        anjay_notify_changed(anjay, OID_TEMPERATURE, IID_DEFAULT, RID_MIN_MEASURED);
-        anjay_notify_changed(anjay, OID_TEMPERATURE, IID_DEFAULT, RID_MAX_MEASURED);
-        anjay_notify_changed(anjay, OID_TEMPERATURE, IID_DEFAULT, RID_SENSOR_VALUE);
+        anjay_notify_changed(anjay, OID_HUMIDITY, IID_DEFAULT, RID_MIN_MEASURED);
+        anjay_notify_changed(anjay, OID_HUMIDITY, IID_DEFAULT, RID_MAX_MEASURED);
+        anjay_notify_changed(anjay, OID_HUMIDITY, IID_DEFAULT, RID_SENSOR_VALUE);
         return 0;
     }
     default:
@@ -134,46 +135,45 @@ static int temp_execute(anjay_t *anjay,
 }
 
 static const anjay_dm_object_def_t OBJ_DEF = {
-    .oid = OID_TEMPERATURE,
-    .version = "1.1",
+    .oid = OID_HUMIDITY,
     .handlers = {
-        .list_instances = temp_list_instances,
-        .list_resources = temp_list_resources,
-        .resource_read = temp_read,
-        .resource_execute = temp_execute
+        .list_instances = hum_list_instances,
+        .list_resources = hum_list_resources,
+        .resource_read = hum_read,
+        .resource_execute = hum_execute
     }
 };
 
 static const anjay_dm_object_def_t *const OBJ_DEF_PTR = &OBJ_DEF;
 
-const anjay_dm_object_def_t *const *temp_object_def(void) {
+const anjay_dm_object_def_t *const *humidity_object_def(void) {
     ensure_sample();
     return &OBJ_DEF_PTR;
 }
 
-void temp_object_update(anjay_t *anjay) {
+void humidity_object_update(anjay_t *anjay) {
     if (!anjay) {
         return;
     }
     bool min_changed = false;
     bool max_changed = false;
-    float value = read_temperature_sensor();
+    float value = read_humidity_sensor();
     bool first = record_sample(value, &min_changed, &max_changed);
 
     TickType_t now = xTaskGetTickCount();
     bool notify_time = g_last_notify_tick
-            && (now - g_last_notify_tick >= pdMS_TO_TICKS(TEMP_NOTIFY_MIN_INTERVAL_MS));
-    bool notify_delta = first || fabsf(value - g_last_notified) >= TEMP_NOTIFY_MIN_DELTA_C;
+            && (now - g_last_notify_tick >= pdMS_TO_TICKS(HUM_NOTIFY_MIN_INTERVAL_MS));
+    bool notify_delta = first || fabsf(value - g_last_notified) >= HUM_NOTIFY_MIN_DELTA_PCT;
 
     if (first || notify_delta || notify_time) {
         g_last_notify_tick = now;
         g_last_notified = value;
-        anjay_notify_changed(anjay, OID_TEMPERATURE, IID_DEFAULT, RID_SENSOR_VALUE);
+        anjay_notify_changed(anjay, OID_HUMIDITY, IID_DEFAULT, RID_SENSOR_VALUE);
     }
     if (min_changed) {
-        anjay_notify_changed(anjay, OID_TEMPERATURE, IID_DEFAULT, RID_MIN_MEASURED);
+        anjay_notify_changed(anjay, OID_HUMIDITY, IID_DEFAULT, RID_MIN_MEASURED);
     }
     if (max_changed) {
-        anjay_notify_changed(anjay, OID_TEMPERATURE, IID_DEFAULT, RID_MAX_MEASURED);
+        anjay_notify_changed(anjay, OID_HUMIDITY, IID_DEFAULT, RID_MAX_MEASURED);
     }
 }

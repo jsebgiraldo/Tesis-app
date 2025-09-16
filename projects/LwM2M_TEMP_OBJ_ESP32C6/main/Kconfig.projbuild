@@ -184,7 +184,7 @@ config LWM2M_OVERRIDE_HOSTNAME_ENABLE
 config LWM2M_OVERRIDE_HOSTNAME
     string "Hostname to resolve for LwM2M server"
     depends on LWM2M_OVERRIDE_HOSTNAME_ENABLE
-    default "thingsboard.edge.play"
+    default "demo.thingsboard.io"
     help
         Hostname that will be resolved on startup and used as the server IP.
         Example: thingsboard.edge.play

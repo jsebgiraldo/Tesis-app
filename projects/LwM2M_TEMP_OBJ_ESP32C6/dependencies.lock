@@ -20,7 +20,7 @@ dependencies:
   idf:
     source:
       type: idf
-    version: 5.5.1
+    version: 5.4.1
 direct_dependencies:
 - anjay-esp-idf
 - espressif/led_strip

@@ -11,19 +11,46 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <math.h>
 #include "esp_mac.h"
 #include "lwip/netdb.h"
 #include "lwip/inet.h"
 #include "lwip/dns.h"
 #include "lwip/ip_addr.h"
-#include "temp_object.h"
+#include "device_object.h"
+#include "firmware_update.h"
+#include "humidity_object.h"
+#include "onoff_object.h"
+#include "connectivity_object.h"
+#include "location_object.h"
+#include "bac19_object.h"
 
 #include <anjay/anjay.h>
 #include <anjay/security.h>
 #include <anjay/server.h>
-#include <anjay/lwm2m_send.h>
-#include <anjay/attr_storage.h>
+#include <anjay/ipso_objects.h>
 #include <avsystem/commons/avs_time.h>
+// Enable richer logs from AVSystem/Anjay to diagnose registration issues
+#include <avsystem/commons/avs_log.h>
+// Attribute storage: enabled in Kconfig to persist server Write-Attributes across reboots
+#include <anjay/attr_storage.h>
+// AVSystem stream helpers used to persist/restore attribute storage
+#include <avsystem/commons/avs_stream_membuf.h>
+#include <avsystem/commons/avs_stream_inbuf.h>
+// NVS for non-volatile storage of attributes
+#include "nvs.h"
+
+// IPSO Temperature value callback for anjay_ipso_basic_sensor_impl_t
+static int ipso_read_temperature(anjay_iid_t iid, void *user_ptr, double *out_value) {
+    (void) iid;
+    (void) user_ptr;
+    TickType_t ticks = xTaskGetTickCount();
+    double base = 25.0;
+    double phase = (double) (ticks % 16384) / 512.0;
+    double delta = 2.5 * sin(phase);
+    *out_value = base + delta;
+    return 0;
+}
 
 // NOTE: keep includes minimal; remove unused dependencies
 
@@ -37,13 +64,7 @@
 #define CONFIG_LWM2M_START_DELAY_MS 1000
 #endif
 
-#ifndef CONFIG_LWM2M_SEND_ENABLE
-#define CONFIG_LWM2M_SEND_ENABLE 1
-#endif
-
-#ifndef CONFIG_LWM2M_SEND_PERIOD_S
-#define CONFIG_LWM2M_SEND_PERIOD_S 30
-#endif
+// Send feature optional; rely primarily on Observe/Notify
 
 // Buffer/cache sizes
 #ifndef CONFIG_LWM2M_IN_BUFFER_SIZE
@@ -57,10 +78,11 @@
 #endif
 
 
-#define APP_SERVER_SSID 1
+// #define APP_SERVER_SSID 1 // not used when Send is removed
 
 static const char *TAG = "lwm2m_client";
 
+// IPSO Basic Sensor (Temperature) value reader
 // Resolved endpoint name used everywhere (Anjay endpoint and default PSK identity)
 static char g_endpoint_name[64] = "";
 
@@ -178,32 +200,8 @@ static void ensure_dns_gateway(void) {
 }
 
 
-#if CONFIG_LWM2M_SEND_ENABLE
-static void send_finished_cb(anjay_t *anjay, anjay_ssid_t ssid,
-                             const anjay_send_batch_t *batch, int result,
-                             void *data) {
-    (void) anjay; (void) batch; (void) data;
-    switch (result) {
-    case ANJAY_SEND_SUCCESS:
-        ESP_LOGI(TAG, "Send delivered to SSID %d", (int) ssid);
-        break;
-#ifdef ANJAY_WITH_SEND
-    case ANJAY_SEND_TIMEOUT:
-        ESP_LOGW(TAG, "Send timeout on SSID %d", (int) ssid);
-        break;
-    case ANJAY_SEND_ABORT:
-        ESP_LOGW(TAG, "Send aborted on SSID %d (offline/cleanup)", (int) ssid);
-        break;
-    case ANJAY_SEND_DEFERRED_ERROR:
-        ESP_LOGE(TAG, "Send deferred error on SSID %d (offline or protocol doesn’t support Send)", (int) ssid);
-        break;
-#endif
-    default:
-        ESP_LOGW(TAG, "Send result SSID %d: %d", (int) ssid, result);
-        break;
-    }
-}
-#endif
+// No manual periodic updates or client-initiated Send; rely on TB Observe/Read
+
 
 // --- Helpers: PSK parsing and retry backoff ---
 static size_t hex_to_bytes(const char *hex, uint8_t *out, size_t out_size) {
@@ -273,24 +271,30 @@ static void build_final_server_uri(char *out, size_t out_size) {
 #endif
     int port = (int) CONFIG_LWM2M_SERVER_PORT;
 
-    // Resolve hostname if enabled, else use literal hostname string
-    char host_ip[48] = {0};
+    // Choose configured hostname and attempt DNS resolution; fallback to gateway if needed
+    char resolved_ip[48] = {0};
     const char *host = NULL;
-#if CONFIG_LWM2M_OVERRIDE_HOSTNAME_ENABLE
-    const char *override_host = CONFIG_LWM2M_OVERRIDE_HOSTNAME;
+    const char *configured_host = NULL;
+    // Prefer user-provided hostname when enabled; otherwise use ThingsBoard demo by default
+#if CONFIG_LWM2M_OVERRIDE_HOSTNAME_ENABLE && 0
+    configured_host = CONFIG_LWM2M_OVERRIDE_HOSTNAME;
+#else
+    configured_host = "192.168.3.100";
+#endif
     ESP_LOGI(TAG, "Hostname config: '%s' (scheme=%s, port=%d)",
-             (override_host && override_host[0]) ? override_host : "(empty)",
+             (configured_host && configured_host[0]) ? configured_host : "(empty)",
              is_secure ? "coaps" : "coap", port);
-    if (override_host && override_host[0] && resolve_hostname_ipv4(override_host, host_ip, sizeof(host_ip))) {
-        host = host_ip;
-        ESP_LOGI(TAG, "Resolved hostname '%s' -> %s", override_host, host_ip);
+    if (configured_host && configured_host[0]
+            && resolve_hostname_ipv4(configured_host, resolved_ip, sizeof(resolved_ip))) {
+        host = resolved_ip;
+        ESP_LOGI(TAG, "Resolved hostname '%s' -> %s", configured_host, resolved_ip);
     } else {
         // Use configured hostname literally if resolution fails
-        host = override_host && override_host[0] ? override_host : "127.0.0.1";
-        if (!(override_host && override_host[0])) {
-            ESP_LOGW(TAG, "Hostname override enabled but empty; defaulting to 127.0.0.1");
+        host = (configured_host && configured_host[0]) ? configured_host : "127.0.0.1";
+        if (!(configured_host && configured_host[0])) {
+            ESP_LOGW(TAG, "Hostname is empty; defaulting to 127.0.0.1");
         } else {
-            ESP_LOGW(TAG, "DNS resolution failed for '%s'; using literal host", override_host);
+            ESP_LOGW(TAG, "DNS resolution failed for '%s'; using literal host", configured_host);
             // If DNS failed but we have a gateway IP (common case: server on gateway), fallback to gateway
             char gw[32] = {0};
             if (get_gateway_ipv4(gw, sizeof(gw))) {
@@ -299,9 +303,6 @@ static void build_final_server_uri(char *out, size_t out_size) {
             }
         }
     }
-#else
-    host = "127.0.0.1";
-#endif
 
     (void) snprintf(out, out_size, "%s://%s:%d", is_secure ? "coaps" : "coap", host, port);
     ESP_LOGI(TAG, "Final LwM2M Server URI: %s", out);
@@ -380,8 +381,8 @@ static int setup_server(anjay_t *anjay) {
         .ssid = 1,
         .lifetime = 300,
         .default_min_period = 5,
-        .default_max_period = 300,
-        .disable_timeout = 86400,
+        .default_max_period = 5,
+        .disable_timeout = -1,
         .binding = "U",
     };
     anjay_iid_t srv_iid = ANJAY_ID_INVALID;
@@ -415,6 +416,12 @@ static void lwm2m_net_event_handler(void *arg, esp_event_base_t event_base, int3
 }
 
 static void lwm2m_client_task(void *arg) {
+    // Increase log verbosity for AVSystem/Anjay to aid troubleshooting
+    avs_log_set_default_level(AVS_LOG_DEBUG);
+    // Ensure objects that might be released in cleanup are initialized
+    const anjay_dm_object_def_t **dev_obj = NULL;
+    const anjay_dm_object_def_t **loc_obj = NULL;
+    const anjay_dm_object_def_t **bac_obj = NULL;
     // Optional delay to let Wi‑Fi/ARP settle before first Register
     if (CONFIG_LWM2M_START_DELAY_MS > 0) {
         ESP_LOGI(TAG, "Startup delay %d ms before LwM2M init", (int) CONFIG_LWM2M_START_DELAY_MS);
@@ -439,6 +446,49 @@ static void lwm2m_client_task(void *arg) {
         vTaskDelete(NULL);
     }
 
+#if CONFIG_ANJAY_WITH_ATTR_STORAGE
+    // --- Restore Attribute Storage from NVS (persisted Write-Attributes) ---
+    {
+        nvs_handle_t nvs;
+        esp_err_t err = nvs_open("lwm2m", NVS_READONLY, &nvs);
+        if (err == ESP_OK) {
+            size_t blob_size = 0;
+            err = nvs_get_blob(nvs, "attr", NULL, &blob_size);
+            if (err == ESP_OK && blob_size > 0) {
+                void *buf = malloc(blob_size);
+                if (buf) {
+                    err = nvs_get_blob(nvs, "attr", buf, &blob_size);
+                    if (err == ESP_OK) {
+                        avs_stream_inbuf_t in = AVS_STREAM_INBUF_STATIC_INITIALIZER;
+                        avs_stream_inbuf_set_buffer(&in, buf, blob_size);
+                        if (avs_is_err(anjay_attr_storage_restore(anjay, (avs_stream_t *) &in))) {
+                            ESP_LOGW(TAG, "Attr storage restore failed; starting clean");
+                        } else {
+                            ESP_LOGI(TAG, "Restored %u bytes of LwM2M attributes from NVS", (unsigned) blob_size);
+                        }
+                    } else {
+                        ESP_LOGW(TAG, "nvs_get_blob(attr) failed: %s", esp_err_to_name(err));
+                    }
+                    free(buf);
+                } else {
+                    ESP_LOGE(TAG, "OOM allocating %u bytes for attr restore", (unsigned) blob_size);
+                }
+            } else if (err == ESP_OK) {
+                ESP_LOGI(TAG, "No stored attributes found (size=0)");
+            } else if (err == ESP_ERR_NVS_NOT_FOUND) {
+                ESP_LOGI(TAG, "No stored attributes in NVS");
+            } else {
+                ESP_LOGW(TAG, "nvs_get_blob(attr) size failed: %s", esp_err_to_name(err));
+            }
+            nvs_close(nvs);
+        } else if (err == ESP_ERR_NVS_NOT_INITIALIZED) {
+            ESP_LOGW(TAG, "NVS not initialized; skipping attr restore");
+        } else {
+            ESP_LOGW(TAG, "nvs_open() failed: %s", esp_err_to_name(err));
+        }
+    }
+#endif // CONFIG_ANJAY_WITH_ATTR_STORAGE
+
     if (anjay_security_object_install(anjay)
         || anjay_server_object_install(anjay)) {
         ESP_LOGE(TAG, "Could not install Security/Server objects");
@@ -449,27 +499,54 @@ static void lwm2m_client_task(void *arg) {
         goto cleanup;
     }
 
-    if (anjay_register_object(anjay, temp_object_def())) {
-        ESP_LOGE(TAG, "Could not register 3303 object");
+    // Install IPSO Basic Sensor for Temperature (3303) to honor TB observe attrs
+    if (anjay_ipso_basic_sensor_install(anjay, 3303, 1)) {
+        ESP_LOGE(TAG, "Could not install IPSO Basic Sensor (3303)");
+        goto cleanup;
+    }
+    const anjay_ipso_basic_sensor_impl_t temp_impl = {
+        .get_value = ipso_read_temperature,
+        .unit = "Cel",
+        .min_range_value = -40.0,
+        .max_range_value = 125.0
+    };
+    if (anjay_ipso_basic_sensor_instance_add(anjay, 3303, 0, temp_impl)) {
+        ESP_LOGE(TAG, "Could not add IPSO Temperature instance");
+        goto cleanup;
+    }
+    if (anjay_register_object(anjay, humidity_object_def())) {
+        ESP_LOGE(TAG, "Could not register 3304 object");
+        goto cleanup;
+    }
+    if (anjay_register_object(anjay, onoff_object_def())) {
+        ESP_LOGE(TAG, "Could not register 3312 object");
+        goto cleanup;
+    }
+    if (anjay_register_object(anjay, connectivity_object_def())) {
+        ESP_LOGE(TAG, "Could not register Connectivity (4) object");
         goto cleanup;
     }
 
-#ifdef ANJAY_WITH_ATTR_STORAGE
-    // Set pmin/pmax only for Temperature object (OID 3303), instance 0
-    {
-        const anjay_oid_t OID_TEMP = 3303;
-        const anjay_iid_t IID0 = 0;
-        anjay_dm_oi_attributes_t attrs = ANJAY_DM_OI_ATTRIBUTES_EMPTY;
-    attrs.min_period = 10;  // notify no more often than every 10s
-    attrs.max_period = 10;  // force at least one notify every 10s
-    int r = anjay_attr_storage_set_instance_attrs(anjay, APP_SERVER_SSID, OID_TEMP, IID0, &attrs);
-        if (r) {
-            ESP_LOGW(TAG, "Failed to set attrs for 3303/0 (r=%d)", r);
-        } else {
-            ESP_LOGI(TAG, "Set pmin=%d, pmax=%d for 3303/0", (int) attrs.min_period, (int) attrs.max_period);
-        }
+    // Register Device (3) object to expose attributes (Manufacturer, Model, Serial, FW)
+    dev_obj = device_object_create(g_endpoint_name);
+    if (!dev_obj || anjay_register_object(anjay, dev_obj)) {
+        ESP_LOGE(TAG, "Could not register Device (3) object");
+        goto cleanup;
     }
-#endif // ANJAY_WITH_ATTR_STORAGE
+
+    // Register Location (6) object with default coordinates (optional)
+    loc_obj = location_object_create();
+    if (!loc_obj || anjay_register_object(anjay, loc_obj)) {
+        ESP_LOGE(TAG, "Could not register Location (6) object");
+        goto cleanup;
+    }
+
+    // Register BAC (19) object for TB OTA metadata compatibility (optional)
+    bac_obj = bac19_object_create();
+    if (!bac_obj || anjay_register_object(anjay, bac_obj)) {
+        ESP_LOGE(TAG, "Could not register BAC (19) object");
+        goto cleanup;
+    }
 
     #if CONFIG_LWM2M_BOOTSTRAP
     ESP_LOGI(TAG, "Starting Anjay event loop (bootstrap mode)");
@@ -482,58 +559,124 @@ static void lwm2m_client_task(void *arg) {
     (void) esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &lwm2m_net_event_handler, anjay, &inst_wifi);
     (void) esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &lwm2m_net_event_handler, anjay, &inst_ip);
 
-    ESP_LOGI(TAG, "Entering LwM2M main loop.");
+    ESP_LOGI(TAG, "Entering LwM2M main loop (server-driven updates).");
 
-    const avs_time_duration_t max_wait = avs_time_duration_from_scalar(250, AVS_TIME_MS);
+    // Install Firmware Update object
+    if (fw_update_install(anjay)) {
+        ESP_LOGE(TAG, "Could not install Firmware Update object");
+        goto cleanup;
+    }
 
-    // Periodically flag temperature as changed (Notify) and Send data
-    const int NOTIFY_PERIOD_S = 10; // match attrs.min_period/max_period above
-    const int SEND_PERIOD_S = 5;    // independent Send to compare with Notify
-    TickType_t last_notify_tick = xTaskGetTickCount();
-    TickType_t last_send_tick = last_notify_tick;
-
+    const avs_time_duration_t max_wait = avs_time_duration_from_scalar(100, AVS_TIME_MS);
+    uint32_t attr_persist_ticks = 0; // ~periodic persistence timer
     while (1) {
         (void) anjay_event_loop_run(anjay, max_wait);
-
-        TickType_t now = xTaskGetTickCount();
-        // Notify path: mark resource changed every NOTIFY_PERIOD_S
-        if ((now - last_notify_tick) >= pdMS_TO_TICKS(NOTIFY_PERIOD_S * 1000)) {
-            last_notify_tick = now;
-            // Mark 3303/0/5700 as changed; Anjay enforces pmin/pmax and sends only if observed
-            (void) anjay_notify_changed(anjay, 3303, 0, 5700);
-            ESP_LOGI(TAG, "Temperature changed (Notify)");
-        }
-
-        // Send path: push current values every SEND_PERIOD_S
-#if CONFIG_LWM2M_SEND_ENABLE
-        if ((now - last_send_tick) >= pdMS_TO_TICKS(SEND_PERIOD_S * 1000)) {
-            last_send_tick = now;
-            anjay_send_batch_builder_t *b = anjay_send_batch_builder_new();
-            if (b) {
-                (void) anjay_send_batch_data_add_current(b, anjay, 3303, 0, 5700);
-                (void) anjay_send_batch_data_add_current(b, anjay, 3303, 0, 5701);
-                anjay_send_batch_t *batch = anjay_send_batch_builder_compile(&b);
-                if (batch) {
-                    ESP_LOGI(TAG, "Queueing LwM2M Send for 3303/0/5700,5701");
-                    int sret = anjay_send_deferrable(anjay, APP_SERVER_SSID, batch, send_finished_cb, NULL);
-                    if (sret != ANJAY_SEND_OK) {
-                        ESP_LOGW(TAG, "Send queue returned %d (muted/offline/bootstrap/protocol?)", sret);
+        // Process Device(3) executes (e.g., Reboot) under server control
+        device_object_update(anjay, dev_obj);
+        // Update IPSO Temperature (3303); Anjay will honor server-set attributes
+        anjay_ipso_basic_sensor_update(anjay, 3303, 0);
+        humidity_object_update(anjay);
+        onoff_object_update(anjay);
+        connectivity_object_update(anjay);
+        location_object_update(anjay, loc_obj);
+#if CONFIG_ANJAY_WITH_ATTR_STORAGE
+        // Periodically persist attributes if modified (about every 5 seconds)
+        if (++attr_persist_ticks >= 50) { // 50 * 100ms ~ 5s
+            attr_persist_ticks = 0;
+            if (anjay_attr_storage_is_modified(anjay)) {
+                nvs_handle_t nvs;
+                esp_err_t err = nvs_open("lwm2m", NVS_READWRITE, &nvs);
+                if (err == ESP_OK) {
+                    avs_stream_t *membuf = avs_stream_membuf_create();
+                    if (membuf) {
+                        if (avs_is_ok(anjay_attr_storage_persist(anjay, membuf))) {
+                            // Get buffer ownership to write to NVS
+                            void *data_ptr = NULL;
+                            size_t data_size = 0;
+                            (void) avs_stream_membuf_fit(membuf);
+                            if (avs_is_ok(avs_stream_membuf_take_ownership(membuf, &data_ptr, &data_size))) {
+                                if (data_ptr && data_size > 0) {
+                                    err = nvs_set_blob(nvs, "attr", data_ptr, data_size);
+                                    if (err == ESP_OK) {
+                                        err = nvs_commit(nvs);
+                                    }
+                                    if (err == ESP_OK) {
+                                        ESP_LOGD(TAG, "Persisted %u bytes of attributes to NVS", (unsigned) data_size);
+                                    } else {
+                                        ESP_LOGW(TAG, "Failed to persist attr to NVS: %s", esp_err_to_name(err));
+                                    }
+                                } else {
+                                    // No attributes -> erase key
+                                    (void) nvs_erase_key(nvs, "attr");
+                                    (void) nvs_commit(nvs);
+                                    ESP_LOGD(TAG, "Attributes empty; NVS key erased");
+                                }
+                                if (data_ptr) {
+                                    free(data_ptr);
+                                }
+                            }
+                        }
+                        (void) avs_stream_cleanup(&membuf);
                     }
-                    anjay_send_batch_release(&batch);
-                } else {
-                    anjay_send_batch_builder_cleanup(&b);
+                    nvs_close(nvs);
                 }
-                ESP_LOGI(TAG, "Temperature sent (Send)");
             }
         }
-#endif
-
+#endif // CONFIG_ANJAY_WITH_ATTR_STORAGE
+        // If a firmware update requested reboot, break to cleanup and reboot
+        if (fw_update_requested()) {
+            break;
+        }
     }
+
 cleanup:
+    // release dev obj if created (safe with NULL)
+#if CONFIG_ANJAY_WITH_ATTR_STORAGE
+    // Final persistence on exit if modified
+    if (anjay && anjay_attr_storage_is_modified(anjay)) {
+        nvs_handle_t nvs;
+        if (nvs_open("lwm2m", NVS_READWRITE, &nvs) == ESP_OK) {
+            avs_stream_t *membuf = avs_stream_membuf_create();
+            if (membuf) {
+                if (avs_is_ok(anjay_attr_storage_persist(anjay, membuf))) {
+                    void *data_ptr = NULL;
+                    size_t data_size = 0;
+                    (void) avs_stream_membuf_fit(membuf);
+                    if (avs_is_ok(avs_stream_membuf_take_ownership(membuf, &data_ptr, &data_size))) {
+                        if (data_ptr && data_size > 0) {
+                            if (nvs_set_blob(nvs, "attr", data_ptr, data_size) == ESP_OK) {
+                                (void) nvs_commit(nvs);
+                            }
+                        } else {
+                            (void) nvs_erase_key(nvs, "attr");
+                            (void) nvs_commit(nvs);
+                        }
+                        if (data_ptr) {
+                            free(data_ptr);
+                        }
+                    }
+                }
+                (void) avs_stream_cleanup(&membuf);
+            }
+            nvs_close(nvs);
+        }
+    }
+#endif // CONFIG_ANJAY_WITH_ATTR_STORAGE
+    device_object_release(dev_obj);
+    location_object_release(loc_obj);
+    bac19_object_release(bac_obj);
     anjay_delete(anjay);
+    if (fw_update_requested()) {
+        fw_update_reboot();
+    }
     vTaskDelete(NULL);
 }
 
 void lwm2m_client_start(void) {
     xTaskCreate(lwm2m_client_task, "lwm2m", CONFIG_LWM2M_TASK_STACK_SIZE, NULL, tskIDLE_PRIORITY + 2, NULL);
 }
+
+
+
+
+
