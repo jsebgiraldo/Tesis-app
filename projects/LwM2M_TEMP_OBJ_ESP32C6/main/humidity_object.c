@@ -136,6 +136,7 @@ static int hum_execute(anjay_t *anjay,
 
 static const anjay_dm_object_def_t OBJ_DEF = {
     .oid = OID_HUMIDITY,
+    .version = "1.1",
     .handlers = {
         .list_instances = hum_list_instances,
         .list_resources = hum_list_resources,

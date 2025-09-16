@@ -19,7 +19,7 @@
 #include "lwip/ip_addr.h"
 #include "device_object.h"
 #include "firmware_update.h"
-#include "humidity_object.h"
+// #include "humidity_object.h" // replaced by IPSO helper for 3304
 #include "onoff_object.h"
 #include "connectivity_object.h"
 #include "location_object.h"
@@ -48,6 +48,18 @@ static int ipso_read_temperature(anjay_iid_t iid, void *user_ptr, double *out_va
     double base = 25.0;
     double phase = (double) (ticks % 16384) / 512.0;
     double delta = 2.5 * sin(phase);
+    *out_value = base + delta;
+    return 0;
+}
+
+// IPSO Humidity value callback for anjay_ipso_basic_sensor_impl_t
+static int ipso_read_humidity(anjay_iid_t iid, void *user_ptr, double *out_value) {
+    (void) iid;
+    (void) user_ptr;
+    TickType_t ticks = xTaskGetTickCount();
+    double base = 55.0;
+    double phase = (double) (ticks % 20000) / 700.0;
+    double delta = 10.0 * sin(phase);
     *out_value = base + delta;
     return 0;
 }
@@ -276,7 +288,7 @@ static void build_final_server_uri(char *out, size_t out_size) {
     const char *host = NULL;
     const char *configured_host = NULL;
     // Prefer user-provided hostname when enabled; otherwise use ThingsBoard demo by default
-#if CONFIG_LWM2M_OVERRIDE_HOSTNAME_ENABLE && 0
+#if CONFIG_LWM2M_OVERRIDE_HOSTNAME_ENABLE
     configured_host = CONFIG_LWM2M_OVERRIDE_HOSTNAME;
 #else
     configured_host = "192.168.3.100";
@@ -514,8 +526,19 @@ static void lwm2m_client_task(void *arg) {
         ESP_LOGE(TAG, "Could not add IPSO Temperature instance");
         goto cleanup;
     }
-    if (anjay_register_object(anjay, humidity_object_def())) {
-        ESP_LOGE(TAG, "Could not register 3304 object");
+    // Install IPSO Basic Sensor for Humidity (3304)
+    if (anjay_ipso_basic_sensor_install(anjay, 3304, 1)) {
+        ESP_LOGE(TAG, "Could not install IPSO Basic Sensor (3304)");
+        goto cleanup;
+    }
+    const anjay_ipso_basic_sensor_impl_t hum_impl = {
+        .get_value = ipso_read_humidity,
+        .unit = "%RH",
+        .min_range_value = 0.0,
+        .max_range_value = 100.0
+    };
+    if (anjay_ipso_basic_sensor_instance_add(anjay, 3304, 0, hum_impl)) {
+        ESP_LOGE(TAG, "Could not add IPSO Humidity instance");
         goto cleanup;
     }
     if (anjay_register_object(anjay, onoff_object_def())) {
@@ -575,7 +598,8 @@ static void lwm2m_client_task(void *arg) {
         device_object_update(anjay, dev_obj);
         // Update IPSO Temperature (3303); Anjay will honor server-set attributes
         anjay_ipso_basic_sensor_update(anjay, 3303, 0);
-        humidity_object_update(anjay);
+    // Update IPSO Humidity (3304)
+    anjay_ipso_basic_sensor_update(anjay, 3304, 0);
         onoff_object_update(anjay);
         connectivity_object_update(anjay);
         location_object_update(anjay, loc_obj);
