@@ -271,7 +271,7 @@ static int resource_execute(anjay_t *anjay,
 
 static const anjay_dm_object_def_t OBJ_DEF = {
     .oid = 3,
-    .version = "1.1",
+    .version = "1.2",
     .handlers = {
         .list_instances = anjay_dm_list_instances_SINGLE,
         .list_resources = list_resources,
