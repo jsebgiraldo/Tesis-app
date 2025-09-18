@@ -396,8 +396,8 @@ static int setup_server(anjay_t *anjay) {
     anjay_server_instance_t srv = {
         .ssid = CONFIG_LWM2M_SERVER_SHORT_ID,
         .lifetime = 300,
-        .default_min_period = -1, // let server set pmin via Write-Attributes
-        .default_max_period = -1, // let server set pmax via Write-Attributes
+        .default_min_period = 5, // let server set pmin via Write-Attributes
+        .default_max_period = 10, // let server set pmax via Write-Attributes
         .disable_timeout = -1,
         .binding = "U",
     };
@@ -428,6 +428,9 @@ static void lwm2m_net_event_handler(void *arg, esp_event_base_t event_base, int3
         log_dns_servers();
         (void) anjay_transport_exit_offline(anjay, ANJAY_TRANSPORT_SET_ALL);
         (void) anjay_transport_schedule_reconnect(anjay, ANJAY_TRANSPORT_SET_ALL);
+        // Hint: mark sensor objects changed so the server may re-read promptly after reconnect
+        (void) anjay_notify_instances_changed(anjay, 3303); // Temperature
+        (void) anjay_notify_instances_changed(anjay, 3304); // Humidity
     }
 }
 
@@ -475,48 +478,8 @@ static void lwm2m_client_task(void *arg) {
         vTaskDelete(NULL);
     }
 
-#if CONFIG_ANJAY_WITH_ATTR_STORAGE
-    // --- Restore Attribute Storage from NVS (persisted Write-Attributes) ---
-    {
-        nvs_handle_t nvs;
-        esp_err_t err = nvs_open("lwm2m", NVS_READONLY, &nvs);
-        if (err == ESP_OK) {
-            size_t blob_size = 0;
-            err = nvs_get_blob(nvs, "attr", NULL, &blob_size);
-            if (err == ESP_OK && blob_size > 0) {
-                void *buf = malloc(blob_size);
-                if (buf) {
-                    err = nvs_get_blob(nvs, "attr", buf, &blob_size);
-                    if (err == ESP_OK) {
-                        avs_stream_inbuf_t in = AVS_STREAM_INBUF_STATIC_INITIALIZER;
-                        avs_stream_inbuf_set_buffer(&in, buf, blob_size);
-                        if (avs_is_err(anjay_attr_storage_restore(anjay, (avs_stream_t *) &in))) {
-                            ESP_LOGW(TAG, "Attr storage restore failed; starting clean");
-                        } else {
-                            ESP_LOGI(TAG, "Restored %u bytes of LwM2M attributes from NVS", (unsigned) blob_size);
-                        }
-                    } else {
-                        ESP_LOGW(TAG, "nvs_get_blob(attr) failed: %s", esp_err_to_name(err));
-                    }
-                    free(buf);
-                } else {
-                    ESP_LOGE(TAG, "OOM allocating %u bytes for attr restore", (unsigned) blob_size);
-                }
-            } else if (err == ESP_OK) {
-                ESP_LOGI(TAG, "No stored attributes found (size=0)");
-            } else if (err == ESP_ERR_NVS_NOT_FOUND) {
-                ESP_LOGI(TAG, "No stored attributes in NVS");
-            } else {
-                ESP_LOGW(TAG, "nvs_get_blob(attr) size failed: %s", esp_err_to_name(err));
-            }
-            nvs_close(nvs);
-        } else if (err == ESP_ERR_NVS_NOT_INITIALIZED) {
-            ESP_LOGW(TAG, "NVS not initialized; skipping attr restore");
-        } else {
-            ESP_LOGW(TAG, "nvs_open() failed: %s", esp_err_to_name(err));
-        }
-    }
-#endif // CONFIG_ANJAY_WITH_ATTR_STORAGE
+// Note: Attribute Storage no longer requires explicit install in recent Anjay.
+// If compiled with CONFIG_ANJAY_WITH_ATTR_STORAGE, it is auto-installed.
 
     if (anjay_security_object_install(anjay)
         || anjay_server_object_install(anjay)) {
@@ -573,6 +536,49 @@ static void lwm2m_client_task(void *arg) {
     #else
     ESP_LOGI(TAG, "Starting Anjay event loop");
     #endif
+    
+#if CONFIG_ANJAY_WITH_ATTR_STORAGE
+    // --- Restore Attribute Storage from NVS AFTER all objects are registered ---
+    {
+        nvs_handle_t nvs;
+        esp_err_t err = nvs_open("lwm2m", NVS_READONLY, &nvs);
+        if (err == ESP_OK) {
+            size_t blob_size = 0;
+            err = nvs_get_blob(nvs, "attr", NULL, &blob_size);
+            if (err == ESP_OK && blob_size > 0) {
+                void *buf = malloc(blob_size);
+                if (buf) {
+                    err = nvs_get_blob(nvs, "attr", buf, &blob_size);
+                    if (err == ESP_OK) {
+                        avs_stream_inbuf_t in = AVS_STREAM_INBUF_STATIC_INITIALIZER;
+                        avs_stream_inbuf_set_buffer(&in, buf, blob_size);
+                        if (avs_is_err(anjay_attr_storage_restore(anjay, (avs_stream_t *) &in))) {
+                            ESP_LOGW(TAG, "Attr storage restore failed; starting clean");
+                        } else {
+                            ESP_LOGI(TAG, "Restored %u bytes of LwM2M attributes from NVS", (unsigned) blob_size);
+                        }
+                    } else {
+                        ESP_LOGW(TAG, "nvs_get_blob(attr) failed: %s", esp_err_to_name(err));
+                    }
+                    free(buf);
+                } else {
+                    ESP_LOGE(TAG, "OOM allocating %u bytes for attr restore", (unsigned) blob_size);
+                }
+            } else if (err == ESP_OK) {
+                ESP_LOGI(TAG, "No stored attributes found (size=0)");
+            } else if (err == ESP_ERR_NVS_NOT_FOUND) {
+                ESP_LOGI(TAG, "No stored attributes in NVS");
+            } else {
+                ESP_LOGW(TAG, "nvs_get_blob(attr) size failed: %s", esp_err_to_name(err));
+            }
+            nvs_close(nvs);
+        } else if (err == ESP_ERR_NVS_NOT_INITIALIZED) {
+            ESP_LOGW(TAG, "NVS not initialized; skipping attr restore");
+        } else {
+            ESP_LOGW(TAG, "nvs_open() failed: %s", esp_err_to_name(err));
+        }
+    }
+#endif // CONFIG_ANJAY_WITH_ATTR_STORAGE
     // Register network event handlers to manage offline/online
     esp_event_handler_instance_t inst_wifi = NULL;
     esp_event_handler_instance_t inst_ip = NULL;
@@ -580,6 +586,9 @@ static void lwm2m_client_task(void *arg) {
     (void) esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &lwm2m_net_event_handler, anjay, &inst_ip);
 
     ESP_LOGI(TAG, "Entering LwM2M main loop (server-driven updates).");
+    // Initial hint right after starting: mark sensor objects as changed so server may read/observe
+    (void) anjay_notify_instances_changed(anjay, 3303);
+    (void) anjay_notify_instances_changed(anjay, 3304);
 
     // Install Firmware Update object
     if (fw_update_install(anjay)) {
