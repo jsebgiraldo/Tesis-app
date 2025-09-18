@@ -11,7 +11,6 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <stdio.h>
-#include <math.h>
 #include "esp_mac.h"
 #include "lwip/netdb.h"
 #include "lwip/inet.h"
@@ -19,7 +18,8 @@
 #include "lwip/ip_addr.h"
 #include "device_object.h"
 #include "firmware_update.h"
-// #include "humidity_object.h" // replaced by IPSO helper for 3304
+#include "temp_object.h"
+#include "humidity_object.h"
 #include "onoff_object.h"
 #include "connectivity_object.h"
 #include "location_object.h"
@@ -28,7 +28,6 @@
 #include <anjay/anjay.h>
 #include <anjay/security.h>
 #include <anjay/server.h>
-#include <anjay/ipso_objects.h>
 #include <avsystem/commons/avs_time.h>
 // Enable richer logs from AVSystem/Anjay to diagnose registration issues
 #include <avsystem/commons/avs_log.h>
@@ -39,30 +38,6 @@
 #include <avsystem/commons/avs_stream_inbuf.h>
 // NVS for non-volatile storage of attributes
 #include "nvs.h"
-
-// IPSO Temperature value callback for anjay_ipso_basic_sensor_impl_t
-static int ipso_read_temperature(anjay_iid_t iid, void *user_ptr, double *out_value) {
-    (void) iid;
-    (void) user_ptr;
-    TickType_t ticks = xTaskGetTickCount();
-    double base = 25.0;
-    double phase = (double) (ticks % 16384) / 512.0;
-    double delta = 2.5 * sin(phase);
-    *out_value = base + delta;
-    return 0;
-}
-
-// IPSO Humidity value callback for anjay_ipso_basic_sensor_impl_t
-static int ipso_read_humidity(anjay_iid_t iid, void *user_ptr, double *out_value) {
-    (void) iid;
-    (void) user_ptr;
-    TickType_t ticks = xTaskGetTickCount();
-    double base = 55.0;
-    double phase = (double) (ticks % 20000) / 700.0;
-    double delta = 10.0 * sin(phase);
-    *out_value = base + delta;
-    return 0;
-}
 
 // NOTE: keep includes minimal; remove unused dependencies
 
@@ -89,39 +64,65 @@ static int ipso_read_humidity(anjay_iid_t iid, void *user_ptr, double *out_value
 #define CONFIG_LWM2M_MSG_CACHE_SIZE 4000
 #endif
 
+// Bootstrap disabled by default; keep fallbacks for normal server config
+#ifndef CONFIG_LWM2M_BOOTSTRAP
+#define CONFIG_LWM2M_BOOTSTRAP 0
+#endif
+
+// Default Short Server ID for non-bootstrap factory provisioning
+#ifndef CONFIG_LWM2M_SERVER_SHORT_ID
+#define CONFIG_LWM2M_SERVER_SHORT_ID 123
+#endif
+
+#ifndef CONFIG_LWM2M_SERVER_PORT
+#define CONFIG_LWM2M_SERVER_PORT 5685
+#endif
+
+// Fallback observe notification period if server does not set pmax (seconds)
+#ifndef CONFIG_LWM2M_OBS_FALLBACK_PERIOD_S
+#define CONFIG_LWM2M_OBS_FALLBACK_PERIOD_S 30
+#endif
+
+// Provide safe defaults for optional Kconfig string macros to avoid
+// compile-time errors when they are not defined in sdkconfig.h
+#ifndef CONFIG_LWM2M_SECURITY_PSK_ID
+#define CONFIG_LWM2M_SECURITY_PSK_ID ""
+#endif
+#ifndef CONFIG_LWM2M_SECURITY_PSK_KEY
+#define CONFIG_LWM2M_SECURITY_PSK_KEY ""
+#endif
+
 
 // #define APP_SERVER_SSID 1 // not used when Send is removed
 
 static const char *TAG = "lwm2m_client";
+// Returns true if the string is a valid dotted-quad IPv4 literal (e.g., "192.168.3.100")
+static bool is_ipv4_literal(const char *s) {
+    if (!s || !*s) {
+        return false;
+    }
+    ip4_addr_t addr;
+    // inet_aton returns 1 on success, 0 on failure
+    return inet_aton(s, &addr) == 1;
+}
 
-// IPSO Basic Sensor (Temperature) value reader
+
 // Resolved endpoint name used everywhere (Anjay endpoint and default PSK identity)
 static char g_endpoint_name[64] = "";
 
 static const char *resolve_endpoint_name(void) {
-    // If configured endpoint is non-empty, use it (sanitize spaces)
-    const char *cfg = CONFIG_LWM2M_ENDPOINT_NAME;
-    if (cfg && cfg[0] != '\0') {
-        size_t len = strlen(cfg);
-        if (len >= sizeof(g_endpoint_name)) {
-            len = sizeof(g_endpoint_name) - 1;
-        }
-        memcpy(g_endpoint_name, cfg, len);
-        g_endpoint_name[len] = '\0';
-        for (char *p = g_endpoint_name; *p; ++p) {
-            if (*p == ' ') { *p = '-'; }
-        }
-        return g_endpoint_name;
-    }
-    // Fallback: derive from WiFi STA MAC
+    // Derive endpoint name from Wi‑Fi MAC and format as ESP32C6-<HEX>
     uint8_t mac[6] = {0};
-    if (esp_read_mac(mac, ESP_MAC_WIFI_STA) == ESP_OK) {
-        (void) snprintf(g_endpoint_name, sizeof(g_endpoint_name),
-                        "esp32c6-%02X%02X%02X%02X%02X%02X",
-                        mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-    } else {
-        (void) snprintf(g_endpoint_name, sizeof(g_endpoint_name), "esp32c6-unknown");
+    esp_err_t err = esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    if (err != ESP_OK) {
+        // Fallback: try SoftAP MAC; if it also fails, use zeros
+        if (esp_read_mac(mac, ESP_MAC_WIFI_SOFTAP) != ESP_OK) {
+            memset(mac, 0, sizeof(mac));
+        }
     }
+    (void) snprintf(g_endpoint_name, sizeof(g_endpoint_name),
+                    "ESP32C6-%02X%02X%02X%02X%02X%02X",
+                    mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
     return g_endpoint_name;
 }
 
@@ -288,7 +289,7 @@ static void build_final_server_uri(char *out, size_t out_size) {
     const char *host = NULL;
     const char *configured_host = NULL;
     // Prefer user-provided hostname when enabled; otherwise use ThingsBoard demo by default
-#if CONFIG_LWM2M_OVERRIDE_HOSTNAME_ENABLE
+#if CONFIG_LWM2M_OVERRIDE_HOSTNAME_ENABLE && 0
     configured_host = CONFIG_LWM2M_OVERRIDE_HOSTNAME;
 #else
     configured_host = "192.168.3.100";
@@ -296,24 +297,30 @@ static void build_final_server_uri(char *out, size_t out_size) {
     ESP_LOGI(TAG, "Hostname config: '%s' (scheme=%s, port=%d)",
              (configured_host && configured_host[0]) ? configured_host : "(empty)",
              is_secure ? "coaps" : "coap", port);
-    if (configured_host && configured_host[0]
-            && resolve_hostname_ipv4(configured_host, resolved_ip, sizeof(resolved_ip))) {
-        host = resolved_ip;
-        ESP_LOGI(TAG, "Resolved hostname '%s' -> %s", configured_host, resolved_ip);
-    } else {
-        // Use configured hostname literally if resolution fails
-        host = (configured_host && configured_host[0]) ? configured_host : "127.0.0.1";
-        if (!(configured_host && configured_host[0])) {
-            ESP_LOGW(TAG, "Hostname is empty; defaulting to 127.0.0.1");
+    if (configured_host && configured_host[0]) {
+        if (is_ipv4_literal(configured_host)) {
+            // User provided a numeric IPv4; always prefer it verbatim
+            host = configured_host;
+            ESP_LOGI(TAG, "Using literal IPv4 host %s", host);
+        } else if (resolve_hostname_ipv4(configured_host, resolved_ip, sizeof(resolved_ip))) {
+            host = resolved_ip;
+            ESP_LOGI(TAG, "Resolved hostname '%s' -> %s", configured_host, resolved_ip);
         } else {
+            // Could not resolve hostname; use it as literal (may or may not route)
+            host = configured_host;
             ESP_LOGW(TAG, "DNS resolution failed for '%s'; using literal host", configured_host);
-            // If DNS failed but we have a gateway IP (common case: server on gateway), fallback to gateway
-            char gw[32] = {0};
-            if (get_gateway_ipv4(gw, sizeof(gw))) {
-                ESP_LOGW(TAG, "Falling back to gateway IP %s for server host", gw);
-                host = gw;
-            }
+            // Optional fallback: if a gateway IP is present, you may enable the following
+            // to try the gateway as a last resort in environments where server==gateway.
+            // NOTE: This is disabled for literal IPv4 and for clarity; uncomment only if desired.
+            // char gw[32] = {0};
+            // if (get_gateway_ipv4(gw, sizeof(gw))) {
+            //     ESP_LOGW(TAG, "Falling back to gateway IP %s for server host", gw);
+            //     host = gw;
+            // }
         }
+    } else {
+        host = "127.0.0.1";
+        ESP_LOGW(TAG, "Hostname is empty; defaulting to 127.0.0.1");
     }
 
     (void) snprintf(out, out_size, "%s://%s:%d", is_secure ? "coaps" : "coap", host, port);
@@ -325,20 +332,17 @@ static int setup_security(anjay_t *anjay) {
     anjay_security_object_purge(anjay);
 
     anjay_security_instance_t sec = {
-        .ssid = 1,
+        .ssid = CONFIG_LWM2M_SERVER_SHORT_ID,
         .security_mode = ANJAY_SECURITY_NOSEC,
     };
 
     // Configure server URI based on bootstrap mode
 #if CONFIG_LWM2M_BOOTSTRAP
     sec.bootstrap_server = true;
-    #ifdef CONFIG_LWM2M_BOOTSTRAP_URI
     sec.server_uri = CONFIG_LWM2M_BOOTSTRAP_URI;
-    #else
-    sec.server_uri = NULL;
-    #endif
 #else
     sec.bootstrap_server = false;
+    sec.ssid = CONFIG_LWM2M_SERVER_SHORT_ID;
     // Build final server URI from scheme/hostname/port
     static char server_uri_buf[160];
     build_final_server_uri(server_uri_buf, sizeof(server_uri_buf));
@@ -390,10 +394,10 @@ static int setup_server(anjay_t *anjay) {
     // purge any existing Server(1) instances before configuring
     anjay_server_object_purge(anjay);
     anjay_server_instance_t srv = {
-        .ssid = 1,
+        .ssid = CONFIG_LWM2M_SERVER_SHORT_ID,
         .lifetime = 300,
-        .default_min_period = 5,
-        .default_max_period = 5,
+        .default_min_period = -1, // let server set pmin via Write-Attributes
+        .default_max_period = -1, // let server set pmax via Write-Attributes
         .disable_timeout = -1,
         .binding = "U",
     };
@@ -430,6 +434,9 @@ static void lwm2m_net_event_handler(void *arg, esp_event_base_t event_base, int3
 static void lwm2m_client_task(void *arg) {
     // Increase log verbosity for AVSystem/Anjay to aid troubleshooting
     avs_log_set_default_level(AVS_LOG_DEBUG);
+    // Show detailed logs from temperature/humidity objects
+    esp_log_level_set("temp_obj", ESP_LOG_DEBUG);
+    esp_log_level_set("humid_obj", ESP_LOG_DEBUG);
     // Ensure objects that might be released in cleanup are initialized
     const anjay_dm_object_def_t **dev_obj = NULL;
     const anjay_dm_object_def_t **loc_obj = NULL;
@@ -451,6 +458,16 @@ static void lwm2m_client_task(void *arg) {
         .out_buffer_size = CONFIG_LWM2M_OUT_BUFFER_SIZE,
         .msg_cache_size = CONFIG_LWM2M_MSG_CACHE_SIZE,
     };
+
+#ifdef ANJAY_WITH_LWM2M11
+    // Force LwM2M 1.1 for registration to align with ThingsBoard's
+    // ObserveComposite paths that include object version suffixes
+    static const anjay_lwm2m_version_config_t LWM2M_VER_11_ONLY = {
+        .minimum_version = ANJAY_LWM2M_VERSION_1_1,
+        .maximum_version = ANJAY_LWM2M_VERSION_1_1
+    };
+    cfg.lwm2m_version_config = &LWM2M_VER_11_ONLY;
+#endif // ANJAY_WITH_LWM2M11
 
     anjay_t *anjay = anjay_new(&cfg);
     if (!anjay) {
@@ -511,34 +528,14 @@ static void lwm2m_client_task(void *arg) {
         goto cleanup;
     }
 
-    // Install IPSO Basic Sensor for Temperature (3303) to honor TB observe attrs
-    if (anjay_ipso_basic_sensor_install(anjay, 3303, 1)) {
-        ESP_LOGE(TAG, "Could not install IPSO Basic Sensor (3303)");
+    // Register IPSO-compliant Temperature (3303) object with min/max/reset resources
+    if (anjay_register_object(anjay, temp_object_def())) {
+        ESP_LOGE(TAG, "Could not register Temperature (3303) object");
         goto cleanup;
     }
-    const anjay_ipso_basic_sensor_impl_t temp_impl = {
-        .get_value = ipso_read_temperature,
-        .unit = "Cel",
-        .min_range_value = -40.0,
-        .max_range_value = 125.0
-    };
-    if (anjay_ipso_basic_sensor_instance_add(anjay, 3303, 0, temp_impl)) {
-        ESP_LOGE(TAG, "Could not add IPSO Temperature instance");
-        goto cleanup;
-    }
-    // Install IPSO Basic Sensor for Humidity (3304)
-    if (anjay_ipso_basic_sensor_install(anjay, 3304, 1)) {
-        ESP_LOGE(TAG, "Could not install IPSO Basic Sensor (3304)");
-        goto cleanup;
-    }
-    const anjay_ipso_basic_sensor_impl_t hum_impl = {
-        .get_value = ipso_read_humidity,
-        .unit = "%RH",
-        .min_range_value = 0.0,
-        .max_range_value = 100.0
-    };
-    if (anjay_ipso_basic_sensor_instance_add(anjay, 3304, 0, hum_impl)) {
-        ESP_LOGE(TAG, "Could not add IPSO Humidity instance");
+    // Register IPSO-compliant Humidity (3304) object with min/max/reset resources
+    if (anjay_register_object(anjay, humidity_object_def())) {
+        ESP_LOGE(TAG, "Could not register Humidity (3304) object");
         goto cleanup;
     }
     if (anjay_register_object(anjay, onoff_object_def())) {
@@ -596,10 +593,10 @@ static void lwm2m_client_task(void *arg) {
         (void) anjay_event_loop_run(anjay, max_wait);
         // Process Device(3) executes (e.g., Reboot) under server control
         device_object_update(anjay, dev_obj);
-        // Update IPSO Temperature (3303); Anjay will honor server-set attributes
-        anjay_ipso_basic_sensor_update(anjay, 3303, 0);
-    // Update IPSO Humidity (3304)
-    anjay_ipso_basic_sensor_update(anjay, 3304, 0);
+        // Refresh simulated Temperature (3303) values and emit observe notifications
+        temp_object_update(anjay);
+        // Refresh simulated Humidity (3304) values and emit observe notifications
+        humidity_object_update(anjay);
         onoff_object_update(anjay);
         connectivity_object_update(anjay);
         location_object_update(anjay, loc_obj);
@@ -699,8 +696,6 @@ cleanup:
 void lwm2m_client_start(void) {
     xTaskCreate(lwm2m_client_task, "lwm2m", CONFIG_LWM2M_TASK_STACK_SIZE, NULL, tskIDLE_PRIORITY + 2, NULL);
 }
-
-
 
 
 

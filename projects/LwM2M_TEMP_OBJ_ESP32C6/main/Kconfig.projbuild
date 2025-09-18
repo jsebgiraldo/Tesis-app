@@ -49,7 +49,7 @@ menu "WiFi Provisioning Configuration"
 
     config PROV_SHOW_QR
         bool "Show QR code in console"
-        default y
+        default n
         help
             Show QR code for provisioning in console output.
 
@@ -135,20 +135,16 @@ menu "LwM2M APP"
 
 config EXAMPLE_WIFI_SSID
     string "WiFi SSID"
-    default "PCI_S107_LINKSYS"
+    default ""
 
 config EXAMPLE_WIFI_PASSWORD
     string "WiFi Password"
-    default "banano2025"
+    default ""
 
 config EXAMPLE_MAXIMUM_RETRY
     int "Maximum WiFi reconnect retries"
     default 5
     range 0 100
-
-config LWM2M_ENDPOINT_NAME
-    string "LwM2M Endpoint Name"
-    default "esp32c6-temp"
 
 choice LWM2M_SERVER_SCHEME
     prompt "LwM2M Server Scheme"
@@ -184,7 +180,7 @@ config LWM2M_OVERRIDE_HOSTNAME_ENABLE
 config LWM2M_OVERRIDE_HOSTNAME
     string "Hostname to resolve for LwM2M server"
     depends on LWM2M_OVERRIDE_HOSTNAME_ENABLE
-    default "demo.thingsboard.io"
+    default "192.168.3.100"
     help
         Hostname that will be resolved on startup and used as the server IP.
         Example: thingsboard.edge.play
@@ -196,7 +192,7 @@ config LWM2M_BOOTSTRAP
 config LWM2M_BOOTSTRAP_URI
     string "Bootstrap Server URI (coap(s)://host:port)"
     depends on LWM2M_BOOTSTRAP
-    default "coap://leshan.eclipseprojects.io:5783"
+    default "coap://192.168.3.100:5683"
 
 config LWM2M_SECURITY_PSK_ID
     string "DTLS PSK Identity (if coaps)"
@@ -213,14 +209,6 @@ config LWM2M_SECURITY_PSK_KEY
         Obtain from ThingsBoard device credentials. Only used if LwM2M Server Scheme
         is set to coaps.
 
-config LWM2M_CONNECT_TIMEOUT_S
-    int "Registration attempt timeout (seconds)"
-    default 5
-    range 5 300
-    help
-        Maximum time to wait for a Register/Update attempt to complete before
-        treating it as failed and applying the retry policy.
-
 config LWM2M_START_DELAY_MS
     int "Startup delay before first register (ms)"
     default 1000
@@ -229,26 +217,6 @@ config LWM2M_START_DELAY_MS
         Wait this long after the LwM2M task starts before creating the client
         and attempting the first Register. Helps avoid transient network/ARP
         races on some Wi‑Fi setups.
-
-config LWM2M_RETRY_DELAY_S
-    int "Retry delay after failed registration (seconds)"
-    default 5
-    range 1 300
-
-config LWM2M_MAX_RETRIES
-    int "Max registration retries (0=infinite)"
-    default 0
-    range 0 100
-
-config LWM2M_RETRY_MAX_DELAY_S
-    int "Retry delay cap for exponential backoff (seconds)"
-    default 60
-    range 1 600
-
-config LWM2M_RETRY_JITTER_PCT
-    int "Retry jitter percentage (+/-)"
-    default 20
-    range 0 100
 
 config LWM2M_TASK_STACK_SIZE
     int "LwM2M task stack size (bytes)"
@@ -269,10 +237,5 @@ config LWM2M_MSG_CACHE_SIZE
     int "Anjay msg_cache_size"
     default 4000
     range 0 8192
-
-config LWM2M_SEND_ENABLE
-    bool "Enable LwM2M Send (TS 1.1)"
-    default y
-
 
 endmenu

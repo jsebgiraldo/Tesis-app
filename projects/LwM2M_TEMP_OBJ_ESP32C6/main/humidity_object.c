@@ -7,6 +7,7 @@
 #include <freertos/task.h>
 
 #include <anjay/io.h>
+#include <esp_log.h>
 
 #define OID_HUMIDITY 3304
 #define IID_DEFAULT 0
@@ -16,15 +17,20 @@
 #define RID_MAX_MEASURED 5602
 #define RID_RESET_MIN_MAX 5605
 
-#define HUM_NOTIFY_MIN_INTERVAL_MS 20000
-#define HUM_NOTIFY_MIN_DELTA_PCT 1.0f
+#define HUM_SAMPLE_INTERVAL_MS 1000
+#define HUM_DELTA_EPS 0.01f
+
+static const char *TAG = "humid_obj";
 
 static float read_humidity_sensor(void) {
     TickType_t ticks = xTaskGetTickCount();
     float base = 55.0f;
-    float phase = (float) (ticks % 20000) / 700.0f;
+    // Adjust phase so adjacent samples a few seconds apart differ
+    float phase = (float) (ticks % 12000) / 300.0f;
     float delta = 10.0f * sinf(phase);
-    return base + delta;
+    // Deterministic small dither (sawtooth ~ +/-0.2 %RH)
+    float saw = ((float) (ticks & 63) / 63.0f - 0.5f) * 0.40f;
+    return base + delta + saw;
 }
 
 static bool g_have_value = false;
@@ -33,6 +39,7 @@ static float g_min_measured = 0.0f;
 static float g_max_measured = 0.0f;
 static float g_last_notified = 0.0f;
 static TickType_t g_last_notify_tick = 0;
+static TickType_t g_last_sample_tick = 0;
 
 static bool record_sample(float value, bool *min_changed, bool *max_changed) {
     if (min_changed) { *min_changed = false; }
@@ -65,6 +72,7 @@ static void ensure_sample(void) {
         (void) record_sample(read_humidity_sensor(), NULL, NULL);
         g_last_notified = g_current_value;
         g_last_notify_tick = xTaskGetTickCount();
+        ESP_LOGD(TAG, "init sample: value=%.3f%%RH min=%.3f max=%.3f", g_current_value, g_min_measured, g_max_measured);
     }
 }
 
@@ -99,12 +107,22 @@ static int hum_read(anjay_t *anjay,
     ensure_sample();
     switch (rid) {
     case RID_SENSOR_VALUE:
-        return anjay_ret_float(ctx, g_current_value);
+        // Fresh sample on read to ensure pmax-driven notifies include new data
+        {
+            bool dummy_min = false, dummy_max = false;
+            float value = read_humidity_sensor();
+            (void) record_sample(value, &dummy_min, &dummy_max);
+            ESP_LOGD(TAG, "READ /3304/0/5700 -> %.3f%%RH (fresh)", g_current_value);
+            return anjay_ret_float(ctx, g_current_value);
+        }
     case RID_SENSOR_UNITS:
+        ESP_LOGD(TAG, "READ /3304/0/5701 -> '%%RH'");
         return anjay_ret_string(ctx, "%RH");
     case RID_MIN_MEASURED:
+        ESP_LOGD(TAG, "READ /3304/0/5601 -> %.3f%%RH", g_min_measured);
         return anjay_ret_float(ctx, g_min_measured);
     case RID_MAX_MEASURED:
+        ESP_LOGD(TAG, "READ /3304/0/5602 -> %.3f%%RH", g_max_measured);
         return anjay_ret_float(ctx, g_max_measured);
     default:
         return ANJAY_ERR_METHOD_NOT_ALLOWED;
@@ -156,25 +174,44 @@ void humidity_object_update(anjay_t *anjay) {
     if (!anjay) {
         return;
     }
-    bool min_changed = false;
-    bool max_changed = false;
-    float value = read_humidity_sensor();
-    bool first = record_sample(value, &min_changed, &max_changed);
-
     TickType_t now = xTaskGetTickCount();
-    bool notify_time = g_last_notify_tick
-            && (now - g_last_notify_tick >= pdMS_TO_TICKS(HUM_NOTIFY_MIN_INTERVAL_MS));
-    bool notify_delta = first || fabsf(value - g_last_notified) >= HUM_NOTIFY_MIN_DELTA_PCT;
+    if (g_last_sample_tick == 0 || (now - g_last_sample_tick) >= pdMS_TO_TICKS(HUM_SAMPLE_INTERVAL_MS)) {
+        g_last_sample_tick = now;
+        bool min_changed = false;
+        bool max_changed = false;
+        float value = read_humidity_sensor();
+        bool first = record_sample(value, &min_changed, &max_changed);
+        float delta = fabsf(value - g_last_notified);
+        bool notify_delta = first || delta >= HUM_DELTA_EPS;
 
-    if (first || notify_delta || notify_time) {
-        g_last_notify_tick = now;
-        g_last_notified = value;
-        anjay_notify_changed(anjay, OID_HUMIDITY, IID_DEFAULT, RID_SENSOR_VALUE);
-    }
-    if (min_changed) {
-        anjay_notify_changed(anjay, OID_HUMIDITY, IID_DEFAULT, RID_MIN_MEASURED);
-    }
-    if (max_changed) {
-        anjay_notify_changed(anjay, OID_HUMIDITY, IID_DEFAULT, RID_MAX_MEASURED);
+        ESP_LOGD(TAG, "update: val=%.3f%%RH delta=%.3f first=%d min=%.3f max=%.3f",
+                 value, delta, (int) first, g_min_measured, g_max_measured);
+
+        if (first || notify_delta) {
+            g_last_notify_tick = now;
+            g_last_notified = value;
+            int err = anjay_notify_changed(anjay, OID_HUMIDITY, IID_DEFAULT, RID_SENSOR_VALUE);
+            if (err < 0) {
+                ESP_LOGW(TAG, "notify_changed /3304/0/5700 failed: %d", err);
+            } else {
+                ESP_LOGD(TAG, "notify_changed /3304/0/5700 queued");
+            }
+        }
+        if (min_changed) {
+            int err = anjay_notify_changed(anjay, OID_HUMIDITY, IID_DEFAULT, RID_MIN_MEASURED);
+            if (err < 0) {
+                ESP_LOGW(TAG, "notify_changed /3304/0/5601 failed: %d", err);
+            } else {
+                ESP_LOGD(TAG, "notify_changed /3304/0/5601 queued");
+            }
+        }
+        if (max_changed) {
+            int err = anjay_notify_changed(anjay, OID_HUMIDITY, IID_DEFAULT, RID_MAX_MEASURED);
+            if (err < 0) {
+                ESP_LOGW(TAG, "notify_changed /3304/0/5602 failed: %d", err);
+            } else {
+                ESP_LOGD(TAG, "notify_changed /3304/0/5602 queued");
+            }
+        }
     }
 }
