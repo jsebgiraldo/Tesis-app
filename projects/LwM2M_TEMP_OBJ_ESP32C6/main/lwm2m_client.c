@@ -289,7 +289,7 @@ static void build_final_server_uri(char *out, size_t out_size) {
     const char *host = NULL;
     const char *configured_host = NULL;
     // Prefer user-provided hostname when enabled; otherwise use ThingsBoard demo by default
-#if CONFIG_LWM2M_OVERRIDE_HOSTNAME_ENABLE && 0
+#if CONFIG_LWM2M_OVERRIDE_HOSTNAME_ENABLE
     configured_host = CONFIG_LWM2M_OVERRIDE_HOSTNAME;
 #else
     configured_host = "192.168.3.100";
