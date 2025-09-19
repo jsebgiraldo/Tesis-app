@@ -1,3 +1,8 @@
+# Enable SNTP-based epoch timestamps by default
+CONFIG_SNTP_ENABLE=y
+CONFIG_SNTP_SERVER="pool.ntp.org"
+CONFIG_SNTP_TZ="UTC0"
+CONFIG_SNTP_MIN_VALID_EPOCH=1609459200
 #
 # WiFi Provisioning Configuration
 #
@@ -48,24 +53,10 @@ CONFIG_ESP_PROTOCOMM_SUPPORT_SECURITY_VERSION_1=y
 CONFIG_ESP_PROTOCOMM_SUPPORT_SECURITY_VERSION_2=y
 
 #
-# LwM2M Client Defaults
+# Project Wi‑Fi defaults
 #
-CONFIG_LWM2M_CONNECT_TIMEOUT_S=5
-CONFIG_LWM2M_RETRY_DELAY_S=5
-CONFIG_LWM2M_RETRY_MAX_DELAY_S=5
-CONFIG_LWM2M_RETRY_JITTER_PCT=0
+CONFIG_EXAMPLE_WIFI_SSID="PI5_AP"
+CONFIG_EXAMPLE_WIFI_PASSWORD="banano2025"
 
-# Enable DTLS and PSK modes for Anjay + mbedTLS backend
-CONFIG_MBEDTLS_SSL_PROTO_DTLS=y
-CONFIG_MBEDTLS_PSK_MODES=y
-
-# Use custom partition table file in this project
-CONFIG_PARTITION_TABLE_CUSTOM=y
-# Disable preset tables to avoid conflicts
-# CONFIG_PARTITION_TABLE_SINGLE_APP is not set
-# CONFIG_PARTITION_TABLE_TWO_OTA is not set
-CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
-CONFIG_PARTITION_TABLE_OFFSET=0x8000
-
-# Target boards typically have >=4MB flash; set flasher size accordingly
-CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+# LwM2M server host is handled via CONFIG_LWM2M_OVERRIDE_HOSTNAME (default "192.168.3.100")
+# Scheme/port are selected in menuconfig (default coap/5685). Obsolete keys removed.

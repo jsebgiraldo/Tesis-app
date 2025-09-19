@@ -1,5 +1,5 @@
 build/
-.sdkconfig*
-.DS_Store
 
-managed_components/
+sdkconfig.old
+.vscode/
+.idea/

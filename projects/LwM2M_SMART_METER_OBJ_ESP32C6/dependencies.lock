@@ -1,6 +1,6 @@
 dependencies:
   anjay-esp-idf:
-    component_hash: d83617be721f11f7af041f3d4b1e13e3c0cec0b5f1fd03cb1da2f62311c27a93
+    component_hash: ed2f253f5ce7088180567f1b244bf889c943df0eed43feb0021737a58426fd69
     dependencies: []
     source:
       git: https://github.com/jsebgiraldo/LwM2M-espidf.git
@@ -20,7 +20,7 @@ dependencies:
   idf:
     source:
       type: idf
-    version: 5.4.2
+    version: 5.4.1
 direct_dependencies:
 - anjay-esp-idf
 - espressif/led_strip

@@ -112,6 +112,6 @@ void app_main(void) {
 
     ESP_LOGI(TAG, "WiFi connected! Starting LwM2M client...");
 
-    // Start LwM2M client (stub by default; replace with Anjay integration)
+    // Start LwM2M client
     lwm2m_client_start();
 }

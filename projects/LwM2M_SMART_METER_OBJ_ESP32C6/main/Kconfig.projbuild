@@ -49,7 +49,7 @@ menu "WiFi Provisioning Configuration"
 
     config PROV_SHOW_QR
         bool "Show QR code in console"
-        default y
+        default n
         help
             Show QR code for provisioning in console output.
 
@@ -135,24 +135,55 @@ menu "LwM2M APP"
 
 config EXAMPLE_WIFI_SSID
     string "WiFi SSID"
-    default "PCI_S107_LINKSYS"
+    default ""
 
 config EXAMPLE_WIFI_PASSWORD
     string "WiFi Password"
-    default "banano2025"
+    default ""
 
 config EXAMPLE_MAXIMUM_RETRY
     int "Maximum WiFi reconnect retries"
     default 5
     range 0 100
 
-config LWM2M_ENDPOINT_NAME
-    string "LwM2M Endpoint Name"
-    default "esp32c6-smartmeter"
+choice LWM2M_SERVER_SCHEME
+    prompt "LwM2M Server Scheme"
+    default LWM2M_SERVER_SCHEME_COAP
+    help
+        Select the transport scheme for LwM2M.
 
-config LWM2M_SERVER_URI
-    string "LwM2M Server URI (coap(s)://host:port)"
-    default "coap://192.168.137.1:5683"
+    config LWM2M_SERVER_SCHEME_COAP
+        bool "coap (NoSec)"
+
+    config LWM2M_SERVER_SCHEME_COAPS
+        bool "coaps (DTLS/PSK)"
+endchoice
+
+config LWM2M_SERVER_PORT
+    int "LwM2M Server Port"
+    default 5685 if LWM2M_SERVER_SCHEME_COAP
+    default 5686 if LWM2M_SERVER_SCHEME_COAPS
+    range 1 65535
+    help
+        UDP port of your LwM2M Server. Defaults follow ThingsBoard convention:
+          - 5685 for coap (NoSec)
+          - 5686 for coaps (DTLS/PSK)
+
+config LWM2M_OVERRIDE_HOSTNAME_ENABLE
+    bool "Resolve server host from a hostname"
+    default y
+    help
+        If enabled, the server host will be determined at runtime by resolving
+        LWM2M_OVERRIDE_HOSTNAME to an IPv4 address and using that IP in the final URI.
+        The scheme and port are taken from the selected options (LwM2M Server Scheme/Port).
+
+config LWM2M_OVERRIDE_HOSTNAME
+    string "Hostname to resolve for LwM2M server"
+    depends on LWM2M_OVERRIDE_HOSTNAME_ENABLE
+    default "192.168.3.100"
+    help
+        Hostname that will be resolved on startup and used as the server IP.
+        Example: thingsboard.edge.play
 
 config LWM2M_BOOTSTRAP
     bool "Use LwM2M Bootstrap"
@@ -161,23 +192,22 @@ config LWM2M_BOOTSTRAP
 config LWM2M_BOOTSTRAP_URI
     string "Bootstrap Server URI (coap(s)://host:port)"
     depends on LWM2M_BOOTSTRAP
-    default "coap://leshan.eclipseprojects.io:5783"
+    default "coap://192.168.3.100:5683"
 
 config LWM2M_SECURITY_PSK_ID
     string "DTLS PSK Identity (if coaps)"
     default ""
+    help
+        PSK identity for DTLS. Leave empty to use LwM2M Endpoint Name as identity
+        (common ThingsBoard convention). Only used if LwM2M Server Scheme is set to coaps.
 
 config LWM2M_SECURITY_PSK_KEY
     string "DTLS PSK Key (hex)"
     default ""
-
-config LWM2M_CONNECT_TIMEOUT_S
-    int "Registration attempt timeout (seconds)"
-    default 5
-    range 5 300
     help
-        Maximum time to wait for a Register/Update attempt to complete before
-        treating it as failed and applying the retry policy.
+        PSK key in hex, without 0x or spaces. Example: 00112233aabbccddeeff.
+        Obtain from ThingsBoard device credentials. Only used if LwM2M Server Scheme
+        is set to coaps.
 
 config LWM2M_START_DELAY_MS
     int "Startup delay before first register (ms)"
@@ -187,26 +217,6 @@ config LWM2M_START_DELAY_MS
         Wait this long after the LwM2M task starts before creating the client
         and attempting the first Register. Helps avoid transient network/ARP
         races on some Wi‑Fi setups.
-
-config LWM2M_RETRY_DELAY_S
-    int "Retry delay after failed registration (seconds)"
-    default 5
-    range 1 300
-
-config LWM2M_MAX_RETRIES
-    int "Max registration retries (0=infinite)"
-    default 0
-    range 0 100
-
-config LWM2M_RETRY_MAX_DELAY_S
-    int "Retry delay cap for exponential backoff (seconds)"
-    default 60
-    range 1 600
-
-config LWM2M_RETRY_JITTER_PCT
-    int "Retry jitter percentage (+/-)"
-    default 20
-    range 0 100
 
 config LWM2M_TASK_STACK_SIZE
     int "LwM2M task stack size (bytes)"
@@ -228,9 +238,35 @@ config LWM2M_MSG_CACHE_SIZE
     default 4000
     range 0 8192
 
-config LWM2M_SEND_ENABLE
-    bool "Enable LwM2M Send (TS 1.1)"
-    default y
+endmenu
 
+menu "Time Sync (SNTP)"
+
+config SNTP_ENABLE
+    bool "Enable SNTP time sync for epoch timestamps"
+    default y
+    help
+        Initialize SNTP at startup to obtain real epoch time for resources like
+        Location Timestamp. If disabled, a monotonic tick-based fallback is used.
+
+config SNTP_SERVER
+    string "SNTP server hostname"
+    depends on SNTP_ENABLE
+    default "pool.ntp.org"
+
+config SNTP_TZ
+    string "POSIX timezone (TZ)"
+    depends on SNTP_ENABLE
+    default "UTC0"
+    help
+        POSIX TZ string, e.g., "UTC0", "CST-6", "CET-1CEST,M3.5.0/2,M10.5.0/3"
+
+config SNTP_MIN_VALID_EPOCH
+    int "Minimum valid epoch (seconds since 1970)"
+    depends on SNTP_ENABLE
+    default 1609459200
+    help
+        Ignore time() values earlier than this (default: 2021-01-01) to avoid
+        using invalid timestamps before SNTP synchronization completes.
 
 endmenu

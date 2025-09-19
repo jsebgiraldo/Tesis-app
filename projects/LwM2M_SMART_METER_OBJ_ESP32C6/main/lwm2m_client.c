@@ -1,4 +1,4 @@
-// Minimal Anjay client with client-initiated bootstrap and Single-Phase Power Meter (OID 10243)
+// Anjay client registering Device(3), Location(6) and Smart Meter (10243)
 #include "sdkconfig.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -9,36 +9,36 @@
 #include "esp_netif.h"
 #include <string.h>
 #include <stdlib.h>
+#include <stdbool.h>
+#include <stdio.h>
+#include "esp_mac.h"
+#include "lwip/netdb.h"
+#include "lwip/inet.h"
+#include "lwip/dns.h"
+#include "lwip/ip_addr.h"
+#include "device_object.h"
+#include "firmware_update.h"
+#include "location_object.h"
 #include "smart_meter_object.h"
 
 #include <anjay/anjay.h>
 #include <anjay/security.h>
 #include <anjay/server.h>
-#include <anjay/lwm2m_send.h>
-#include <anjay/attr_storage.h>
 #include <avsystem/commons/avs_time.h>
+#include <avsystem/commons/avs_log.h>
+#include <anjay/attr_storage.h>
+#include <avsystem/commons/avs_stream_membuf.h>
+#include <avsystem/commons/avs_stream_inbuf.h>
+#include "nvs.h"
 
-// NOTE: keep includes minimal; remove unused dependencies
-
-// Fallback defaults if sdkconfig hasn't yet picked up new Kconfig symbols
+static const char *TAG = "lwm2m_client";
 
 #ifndef CONFIG_LWM2M_TASK_STACK_SIZE
 #define CONFIG_LWM2M_TASK_STACK_SIZE 8192
 #endif
-
 #ifndef CONFIG_LWM2M_START_DELAY_MS
 #define CONFIG_LWM2M_START_DELAY_MS 1000
 #endif
-
-#ifndef CONFIG_LWM2M_SEND_ENABLE
-#define CONFIG_LWM2M_SEND_ENABLE 1
-#endif
-
-#ifndef CONFIG_LWM2M_SEND_PERIOD_S
-#define CONFIG_LWM2M_SEND_PERIOD_S 30
-#endif
-
-// Buffer/cache sizes
 #ifndef CONFIG_LWM2M_IN_BUFFER_SIZE
 #define CONFIG_LWM2M_IN_BUFFER_SIZE 4000
 #endif
@@ -48,178 +48,147 @@
 #ifndef CONFIG_LWM2M_MSG_CACHE_SIZE
 #define CONFIG_LWM2M_MSG_CACHE_SIZE 4000
 #endif
-
-
-#define APP_SERVER_SSID 1
-
-static const char *TAG = "lwm2m_client";
-
-
-#if CONFIG_LWM2M_SEND_ENABLE
-static void send_finished_cb(anjay_t *anjay, anjay_ssid_t ssid,
-                             const anjay_send_batch_t *batch, int result,
-                             void *data) {
-    (void) anjay; (void) batch; (void) data;
-    switch (result) {
-    case ANJAY_SEND_SUCCESS:
-        ESP_LOGI(TAG, "Send delivered to SSID %d", (int) ssid);
-        break;
-#ifdef ANJAY_WITH_SEND
-    case ANJAY_SEND_TIMEOUT:
-        ESP_LOGW(TAG, "Send timeout on SSID %d", (int) ssid);
-        break;
-    case ANJAY_SEND_ABORT:
-        ESP_LOGW(TAG, "Send aborted on SSID %d (offline/cleanup)", (int) ssid);
-        break;
-    case ANJAY_SEND_DEFERRED_ERROR:
-        ESP_LOGE(TAG, "Send deferred error on SSID %d (offline or protocol doesn’t support Send)", (int) ssid);
-        break;
+#ifndef CONFIG_LWM2M_BOOTSTRAP
+#define CONFIG_LWM2M_BOOTSTRAP 0
 #endif
-    default:
-        ESP_LOGW(TAG, "Send result SSID %d: %d", (int) ssid, result);
-        break;
-    }
-}
+#ifndef CONFIG_LWM2M_SERVER_SHORT_ID
+#define CONFIG_LWM2M_SERVER_SHORT_ID 123
+#endif
+#ifndef CONFIG_LWM2M_SECURITY_PSK_ID
+#define CONFIG_LWM2M_SECURITY_PSK_ID ""
+#endif
+#ifndef CONFIG_LWM2M_SECURITY_PSK_KEY
+#define CONFIG_LWM2M_SECURITY_PSK_KEY ""
 #endif
 
-// --- Helpers: PSK parsing and retry backoff ---
-static size_t hex_to_bytes(const char *hex, uint8_t *out, size_t out_size) {
-    size_t len = strlen(hex);
-    if (len % 2 != 0) {
-        return 0;
+static char g_endpoint_name[64] = "";
+
+static const char *resolve_endpoint_name(void) {
+    uint8_t mac[6] = {0};
+    if (esp_read_mac(mac, ESP_MAC_WIFI_STA) != ESP_OK) {
+        (void) esp_read_mac(mac, ESP_MAC_WIFI_SOFTAP);
     }
-    size_t bytes = len / 2;
-    if (bytes > out_size) {
-        return 0;
-    }
-    for (size_t i = 0; i < bytes; ++i) {
-        char c1 = hex[2 * i];
-        char c2 = hex[2 * i + 1];
-        int v1 = (c1 >= '0' && c1 <= '9') ? (c1 - '0')
-                 : (c1 >= 'a' && c1 <= 'f') ? (c1 - 'a' + 10)
-                 : (c1 >= 'A' && c1 <= 'F') ? (c1 - 'A' + 10) : -1;
-        int v2 = (c2 >= '0' && c2 <= '9') ? (c2 - '0')
-                 : (c2 >= 'a' && c2 <= 'f') ? (c2 - 'a' + 10)
-                 : (c2 >= 'A' && c2 <= 'F') ? (c2 - 'A' + 10) : -1;
-        if (v1 < 0 || v2 < 0) {
-            return 0;
-        }
-        out[i] = (uint8_t) ((v1 << 4) | v2);
-    }
-    return bytes;
+    snprintf(g_endpoint_name, sizeof(g_endpoint_name),
+             "ESP32C6-SM-%02X%02X%02X%02X%02X%02X",
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    return g_endpoint_name;
 }
 
-// Build LwM2M Server URI using the Wi‑Fi gateway IP and scheme/port
-static const char *build_server_uri_from_gateway(void) {
-    static char uri[64];
-    const char *cfg_uri = CONFIG_LWM2M_SERVER_URI;
-
-    // Default scheme/port
-    char scheme[6] = "coap"; // "coap" or "coaps"
-    int port = 5683;
-
-    const char *sep = strstr(cfg_uri, "://");
-    const char *hostport = cfg_uri;
-    if (sep) {
-        size_t slen = (size_t) (sep - cfg_uri);
-        if (slen > 0 && slen < sizeof(scheme)) {
-            memcpy(scheme, cfg_uri, slen);
-            scheme[slen] = '\0';
-        }
-        hostport = sep + 3;
+static bool resolve_hostname_ipv4(const char *hostname, char *ip_out, size_t ip_out_size) {
+    if (!hostname || !*hostname || !ip_out || ip_out_size < 8) {
+        return false;
     }
-    if (strcmp(scheme, "coaps") == 0) {
-        port = 5684;
+    struct addrinfo hints = {0};
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_DGRAM;
+    struct addrinfo *res = NULL;
+    int err = getaddrinfo(hostname, NULL, &hints, &res);
+    if (err != 0 || !res) {
+        ESP_LOGW(TAG, "getaddrinfo('%s') failed: %d", hostname, err);
+        return false;
     }
-    const char *colon = strchr(hostport, ':');
-    if (colon && colon[1] != '\0') {
-        int p = atoi(colon + 1);
-        if (p > 0 && p < 65536) {
-            port = p;
+    bool ok = false;
+    for (struct addrinfo *p = res; p; p = p->ai_next) {
+        if (p->ai_family == AF_INET) {
+            struct sockaddr_in *addr = (struct sockaddr_in *) p->ai_addr;
+            const char *s = inet_ntop(AF_INET, &addr->sin_addr, ip_out, (socklen_t) ip_out_size);
+            if (s && *s) { ok = true; break; }
         }
     }
+    freeaddrinfo(res);
+    return ok;
+}
 
-    esp_netif_t *sta = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
-    esp_netif_ip_info_t ip;
-    if (sta && esp_netif_get_ip_info(sta, &ip) == ESP_OK) {
-        // Use gateway IP as server address
-        snprintf(uri, sizeof(uri), "%s://%d.%d.%d.%d:%d", scheme, IP2STR(&ip.gw), port);
-        return uri;
+static void build_final_server_uri(char *out, size_t out_size) {
+    const bool is_secure =
+#if CONFIG_LWM2M_SERVER_SCHEME_COAPS
+        true;
+#else
+        false;
+#endif
+    int port = (int) CONFIG_LWM2M_SERVER_PORT;
+    char resolved_ip[48] = {0};
+    const char *host = NULL;
+#if CONFIG_LWM2M_OVERRIDE_HOSTNAME_ENABLE && 1
+    const char *configured_host = CONFIG_LWM2M_OVERRIDE_HOSTNAME;
+#else
+    const char *configured_host = "192.168.3.100";
+#endif
+    if (configured_host && configured_host[0]) {
+        if (resolve_hostname_ipv4(configured_host, resolved_ip, sizeof(resolved_ip))) {
+            host = resolved_ip;
+        } else {
+            host = configured_host;
+        }
+    } else {
+        host = "127.0.0.1";
     }
-    // Fallback to configured URI if gateway not available
-    return cfg_uri;
+    snprintf(out, out_size, "%s://%s:%d", is_secure ? "coaps" : "coap", host, port);
 }
 
 static int setup_security(anjay_t *anjay) {
-    // purge any existing Security(0) instances before configuring
     anjay_security_object_purge(anjay);
-
     anjay_security_instance_t sec = {
-        .ssid = 1,
+        .ssid = CONFIG_LWM2M_SERVER_SHORT_ID,
         .security_mode = ANJAY_SECURITY_NOSEC,
     };
-
-    // Configure server URI based on bootstrap mode
 #if CONFIG_LWM2M_BOOTSTRAP
     sec.bootstrap_server = true;
-    #ifdef CONFIG_LWM2M_BOOTSTRAP_URI
     sec.server_uri = CONFIG_LWM2M_BOOTSTRAP_URI;
-    #else
-    sec.server_uri = NULL;
-    #endif
 #else
     sec.bootstrap_server = false;
-    sec.server_uri = build_server_uri_from_gateway();
+    sec.ssid = CONFIG_LWM2M_SERVER_SHORT_ID;
+    static char server_uri_buf[160];
+    build_final_server_uri(server_uri_buf, sizeof(server_uri_buf));
+    sec.server_uri = server_uri_buf;
 #endif
-
-    // Configure PSK if requested and using coaps
     const char *uri = sec.server_uri;
     bool uri_secure = (uri && strncmp(uri, "coaps", 5) == 0);
-    const char *psk_id = CONFIG_LWM2M_SECURITY_PSK_ID;
+    const char *psk_id = (CONFIG_LWM2M_SECURITY_PSK_ID[0] != '\0') ? CONFIG_LWM2M_SECURITY_PSK_ID : g_endpoint_name;
     const char *psk_key_hex = CONFIG_LWM2M_SECURITY_PSK_KEY;
     if (uri_secure && psk_id && psk_key_hex && psk_id[0] != '\0' && psk_key_hex[0] != '\0') {
         uint8_t key_buf[64];
-        size_t key_len = hex_to_bytes(psk_key_hex, key_buf, sizeof(key_buf));
-        if (key_len == 0) {
-            ESP_LOGE(TAG, "Invalid PSK key hex; falling back to NOSEC");
-        } else {
+        size_t len = 0;
+        size_t hexlen = strlen(psk_key_hex);
+        if (hexlen % 2 == 0 && hexlen/2 <= sizeof(key_buf)) {
+            for (size_t i = 0; i < hexlen/2; ++i) {
+                char c1 = psk_key_hex[2*i];
+                char c2 = psk_key_hex[2*i+1];
+                int v1 = (c1 >= '0' && c1 <= '9') ? (c1 - '0') : (c1 >= 'a' && c1 <= 'f') ? (c1 - 'a' + 10) : (c1 >= 'A' && c1 <= 'F') ? (c1 - 'A' + 10) : -1;
+                int v2 = (c2 >= '0' && c2 <= '9') ? (c2 - '0') : (c2 >= 'a' && c2 <= 'f') ? (c2 - 'a' + 10) : (c2 >= 'A' && c2 <= 'F') ? (c2 - 'A' + 10) : -1;
+                if (v1 < 0 || v2 < 0) { len = 0; break; }
+                key_buf[i] = (uint8_t) ((v1 << 4) | v2);
+                len++;
+            }
+        }
+        if (len > 0) {
             sec.security_mode = ANJAY_SECURITY_PSK;
             sec.public_cert_or_psk_identity = (const uint8_t *) psk_id;
             sec.public_cert_or_psk_identity_size = strlen(psk_id);
             sec.private_cert_or_psk_key = key_buf;
-            sec.private_cert_or_psk_key_size = key_len;
+            sec.private_cert_or_psk_key_size = len;
         }
     }
-
     anjay_iid_t sec_iid = ANJAY_ID_INVALID;
-    ESP_LOGI(TAG, "Security URI: %s", sec.server_uri ? sec.server_uri : "(null)");
     int result = anjay_security_object_add_instance(anjay, &sec, &sec_iid);
     if (result) {
         ESP_LOGE(TAG, "Failed to add Security instance: %d", result);
         return result;
     }
-    #if CONFIG_LWM2M_BOOTSTRAP
-    ESP_LOGI(TAG, "Security(0) instance added (iid=%ld) [bootstrap]", (long) sec_iid);
-    #else
-    ESP_LOGI(TAG, "Security(0) instance added (iid=%ld)", (long) sec_iid);
-    #endif
     return 0;
 }
 
 static int setup_server(anjay_t *anjay) {
-    // In bootstrap mode, do not pre-provision Server(1)
 #if CONFIG_LWM2M_BOOTSTRAP
-    ESP_LOGI(TAG, "Bootstrap mode: skipping Server(1) factory setup");
     return 0;
 #else
-    // purge any existing Server(1) instances before configuring
     anjay_server_object_purge(anjay);
     anjay_server_instance_t srv = {
-        .ssid = 1,
+        .ssid = CONFIG_LWM2M_SERVER_SHORT_ID,
         .lifetime = 300,
         .default_min_period = 5,
-        .default_max_period = 300,
-        .disable_timeout = 86400,
+        .default_max_period = 10,
+        .disable_timeout = -1,
         .binding = "U",
     };
     anjay_iid_t srv_iid = ANJAY_ID_INVALID;
@@ -228,35 +197,23 @@ static int setup_server(anjay_t *anjay) {
         ESP_LOGE(TAG, "Failed to add Server instance: %d", result);
         return result;
     }
-    ESP_LOGI(TAG, "Server(1) instance added (iid=%ld)", (long) srv_iid);
     return 0;
 #endif
 }
 
-// Handle Wi‑Fi/IP events to toggle Anjay offline/online for faster recovery
-static void lwm2m_net_event_handler(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data) {
-    anjay_t *anjay = (anjay_t *) arg;
-    if (!anjay) {
-        return;
-    }
-    if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
-        ESP_LOGW(TAG, "WiFi disconnected -> entering LwM2M offline");
-        (void) anjay_transport_enter_offline(anjay, ANJAY_TRANSPORT_SET_ALL);
-    } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
-        ESP_LOGI(TAG, "Got IP -> exiting LwM2M offline and scheduling reconnect");
-        (void) anjay_transport_exit_offline(anjay, ANJAY_TRANSPORT_SET_ALL);
-        (void) anjay_transport_schedule_reconnect(anjay, ANJAY_TRANSPORT_SET_ALL);
-    }
-}
-
 static void lwm2m_client_task(void *arg) {
-    // Optional delay to let Wi‑Fi/ARP settle before first Register
+    avs_log_set_default_level(AVS_LOG_DEBUG);
+    const anjay_dm_object_def_t **dev_obj = NULL;
+    const anjay_dm_object_def_t **loc_obj = NULL;
+    const anjay_dm_object_def_t **sm_obj = NULL;
     if (CONFIG_LWM2M_START_DELAY_MS > 0) {
-        ESP_LOGI(TAG, "Startup delay %d ms before LwM2M init", (int) CONFIG_LWM2M_START_DELAY_MS);
         vTaskDelay(pdMS_TO_TICKS(CONFIG_LWM2M_START_DELAY_MS));
     }
+    resolve_endpoint_name();
+    ESP_LOGI(TAG, "Endpoint: %s", g_endpoint_name);
+
     anjay_configuration_t cfg = {
-        .endpoint_name = CONFIG_LWM2M_ENDPOINT_NAME,
+        .endpoint_name = g_endpoint_name,
         .in_buffer_size = CONFIG_LWM2M_IN_BUFFER_SIZE,
         .out_buffer_size = CONFIG_LWM2M_OUT_BUFFER_SIZE,
         .msg_cache_size = CONFIG_LWM2M_MSG_CACHE_SIZE,
@@ -273,94 +230,48 @@ static void lwm2m_client_task(void *arg) {
         ESP_LOGE(TAG, "Could not install Security/Server objects");
         goto cleanup;
     }
-
     if (setup_security(anjay) || setup_server(anjay)) {
         goto cleanup;
     }
 
-    if (anjay_register_object(anjay, smart_meter_object_def())) {
-        ESP_LOGE(TAG, "Could not register 10243 object");
+    dev_obj = device_object_create(g_endpoint_name);
+    if (!dev_obj || anjay_register_object(anjay, dev_obj)) {
+        ESP_LOGE(TAG, "Could not register Device (3) object");
+        goto cleanup;
+    }
+    loc_obj = location_object_create();
+    if (!loc_obj || anjay_register_object(anjay, loc_obj)) {
+        ESP_LOGE(TAG, "Could not register Location (6) object");
+        goto cleanup;
+    }
+    sm_obj = smart_meter_object_create();
+    if (!sm_obj || anjay_register_object(anjay, sm_obj)) {
+        ESP_LOGE(TAG, "Could not register Smart Meter (10243) object");
         goto cleanup;
     }
 
-#ifdef ANJAY_WITH_ATTR_STORAGE
-    // Set pmin/pmax for Power Meter object (OID 10243), instance 0
-    {
-        const anjay_oid_t OID_SM = 10243;
-        const anjay_iid_t IID0 = 0;
-        anjay_dm_oi_attributes_t attrs = ANJAY_DM_OI_ATTRIBUTES_EMPTY;
-        attrs.min_period = 10;  // notify no more often than every 10s
-        attrs.max_period = 10;  // force at least one notify every 10s
-        int r = anjay_attr_storage_set_instance_attrs(anjay, APP_SERVER_SSID, OID_SM, IID0, &attrs);
-        if (r) {
-            ESP_LOGW(TAG, "Failed to set attrs for 10243/0 (r=%d)", r);
-        } else {
-            ESP_LOGI(TAG, "Set pmin=%d, pmax=%d for 10243/0", (int) attrs.min_period, (int) attrs.max_period);
-        }
+    if (fw_update_install(anjay)) {
+        ESP_LOGE(TAG, "Could not install Firmware Update object");
+        goto cleanup;
     }
-#endif // ANJAY_WITH_ATTR_STORAGE
 
-    #if CONFIG_LWM2M_BOOTSTRAP
-    ESP_LOGI(TAG, "Starting Anjay event loop (bootstrap mode)");
-    #else
-    ESP_LOGI(TAG, "Starting Anjay event loop");
-    #endif
-    // Register network event handlers to manage offline/online
-    esp_event_handler_instance_t inst_wifi = NULL;
-    esp_event_handler_instance_t inst_ip = NULL;
-    (void) esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &lwm2m_net_event_handler, anjay, &inst_wifi);
-    (void) esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &lwm2m_net_event_handler, anjay, &inst_ip);
-
-    ESP_LOGI(TAG, "Entering LwM2M main loop.");
-
-    const avs_time_duration_t max_wait = avs_time_duration_from_scalar(250, AVS_TIME_MS);
-
-    // Periodically flag meter values as changed (Notify) and Send data
-    const int NOTIFY_PERIOD_S = 10; // match attrs.min_period/max_period above
-    const int SEND_PERIOD_S = 5;    // independent Send to compare with Notify
-    TickType_t last_notify_tick = xTaskGetTickCount();
-    TickType_t last_send_tick = last_notify_tick;
-
+    const avs_time_duration_t max_wait = avs_time_duration_from_scalar(100, AVS_TIME_MS);
     while (1) {
         (void) anjay_event_loop_run(anjay, max_wait);
-
-        TickType_t now = xTaskGetTickCount();
-        // Notify path: mark resource changed every NOTIFY_PERIOD_S
-        if ((now - last_notify_tick) >= pdMS_TO_TICKS(NOTIFY_PERIOD_S * 1000)) {
-            last_notify_tick = now;
-            // Mark 10243/0/4 (Voltage) as changed; Anjay enforces pmin/pmax and sends only if observed
-            (void) anjay_notify_changed(anjay, 10243, 0, 4);
-            ESP_LOGI(TAG, "Power meter voltage changed (Notify)");
-        }
-
-        // Send path: push current values every SEND_PERIOD_S
-#if CONFIG_LWM2M_SEND_ENABLE
-        if ((now - last_send_tick) >= pdMS_TO_TICKS(SEND_PERIOD_S * 1000)) {
-            last_send_tick = now;
-            anjay_send_batch_builder_t *b = anjay_send_batch_builder_new();
-            if (b) {
-                (void) anjay_send_batch_data_add_current(b, anjay, 10243, 0, 4);  // Voltage
-                (void) anjay_send_batch_data_add_current(b, anjay, 10243, 0, 5);  // Current
-                (void) anjay_send_batch_data_add_current(b, anjay, 10243, 0, 6);  // Active Power
-                anjay_send_batch_t *batch = anjay_send_batch_builder_compile(&b);
-                if (batch) {
-                    ESP_LOGI(TAG, "Queueing LwM2M Send for 10243/0/4,5,6");
-                    int sret = anjay_send_deferrable(anjay, APP_SERVER_SSID, batch, send_finished_cb, NULL);
-                    if (sret != ANJAY_SEND_OK) {
-                        ESP_LOGW(TAG, "Send queue returned %d (muted/offline/bootstrap/protocol?)", sret);
-                    }
-                    anjay_send_batch_release(&batch);
-                } else {
-                    anjay_send_batch_builder_cleanup(&b);
-                }
-                ESP_LOGI(TAG, "Meter values sent (Send)");
-            }
-        }
-#endif
-
+        device_object_update(anjay, dev_obj);
+        location_object_update(anjay, loc_obj);
+        smart_meter_object_update(anjay, sm_obj);
+        if (fw_update_requested()) { break; }
     }
+
 cleanup:
+    device_object_release(dev_obj);
+    location_object_release(loc_obj);
+    smart_meter_object_release(sm_obj);
     anjay_delete(anjay);
+    if (fw_update_requested()) {
+        fw_update_reboot();
+    }
     vTaskDelete(NULL);
 }
 

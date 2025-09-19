@@ -1,180 +1,291 @@
 #include "smart_meter_object.h"
+#include <anjay/dm.h>
+#include <anjay/io.h>
 #include <math.h>
-#include <stdbool.h>
-#include <anjay/anjay.h>
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
+#include <string.h>
+#include <stdio.h>
+#include <esp_log.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 
-// Simple mocked single-phase power meter source
-static void read_instantaneous(float *voltage_v, float *current_a, float *pf, float *freq_hz) {
-    extern unsigned long xTaskGetTickCount(void);
-    float t = (float) (xTaskGetTickCount() % 100000) / 1000.0f;
-    float v = 230.0f + 5.0f * sinf(t * 0.2f);
-    float i = 1.50f + 0.30f * sinf(t * 0.5f + 1.0f);
-    float p = 0.92f + 0.05f * sinf(t * 0.1f + 2.0f);
-    if (p > 1.0f) p = 1.0f;
-    if (p < -1.0f) p = -1.0f;
-    float f = 60.0f + 0.05f * sinf(t * 0.3f);
-    if (voltage_v) *voltage_v = v;
-    if (current_a) *current_a = i;
-    if (pf) *pf = p;
-    if (freq_hz) *freq_hz = f;
-}
+#define OID_SMART_METER 10243
+// Resource IDs per provided table
+#define RID_MANUFACTURER                 0   // string
+#define RID_MODEL_NUMBER                 1   // string
+#define RID_SERIAL_NUMBER                2   // string
+#define RID_DESCRIPTION                  3   // string
+#define RID_TENSION                      4   // float (V)
+#define RID_CURRENT                      5   // float (A) MANDATORY
+#define RID_ACTIVE_POWER                 6   // float (kW)
+#define RID_REACTIVE_POWER               7   // float (kvar)
+#define RID_INDUCTIVE_REACTIVE_POWER     8   // float (kvar)
+#define RID_CAPACITIVE_REACTIVE_POWER    9   // float (kvar)
+#define RID_APPARENT_POWER               10  // float (kVA)
+#define RID_POWER_FACTOR                 11  // float (-1..1)
+#define RID_THD_V                        12  // float (/100)
+#define RID_THD_A                        13  // float (/100)
+#define RID_ACTIVE_ENERGY                14  // float (kWh)
+#define RID_REACTIVE_ENERGY              15  // float (kvarh)
+#define RID_APPARENT_ENERGY              16  // float (kVAh)
+#define RID_FREQUENCY                    17  // float (Hz)
 
-static float apparent_power_kva(float v, float i) {
-    return (v * i) / 1000.0f;
-}
+typedef struct {
+    const anjay_dm_object_def_t *def;
+    // Identification
+    char manufacturer[32];
+    char model_number[32];
+    char serial_number[32];
+    char description[64];
 
-static float active_power_kw(float v, float i, float pf) {
-    return (v * i * pf) / 1000.0f;
-}
+    // Measurements
+    float current_a;      // A
+    float active_power_kw;      // kW
+    float reactive_power_kvar;  // kvar
+    float inductive_reactive_power_kvar;  // kvar
+    float capacitive_reactive_power_kvar; // kvar
+    float apparent_power_kva;    // kVA
+    float power_factor;          // -1..1
+    float thd_v;                 // fraction (/100)
+    float thd_a;                 // fraction (/100)
+    float active_energy_kwh;     // kWh
+    float reactive_energy_kvarh; // kvarh
+    float apparent_energy_kvah;  // kVAh
+    float frequency_hz;          // Hz
 
-static float reactive_power_kvar(float v, float i, float pf) {
-    float pf2 = pf * pf;
-    if (pf2 > 1.0f) pf2 = 1.0f;
-    float sinphi = sqrtf(fmaxf(0.0f, 1.0f - pf2));
-    return (v * i * sinphi) / 1000.0f;
-}
+    // internal simulation state
+    float voltage_v; // for internal calc (not exposed directly except as string)
+    TickType_t last_update;
+} sm_ctx_t;
 
-// Simple energy accumulators
-static double g_e_active_kwh = 0.0;
-static double g_e_reactive_kvarh = 0.0;
-static double g_e_apparent_kvah = 0.0;
-static TickType_t g_last_tick = 0;
+static const char *TAG_SM = "sm_obj";
 
-static void update_energy_accumulators(void) {
-    TickType_t now = xTaskGetTickCount();
-    if (g_last_tick == 0) {
-        g_last_tick = now;
-        return;
-    }
-    TickType_t dt_ticks = now - g_last_tick;
-    g_last_tick = now;
-    float dt_h = (float) dt_ticks / (float) configTICK_RATE_HZ / 3600.0f;
-    float v,i,pf,f;
-    read_instantaneous(&v, &i, &pf, &f);
-    (void) f;
-    float p_kw = active_power_kw(v, i, pf);
-    float q_kvar = reactive_power_kvar(v, i, pf);
-    float s_kva = apparent_power_kva(v, i);
-    g_e_active_kwh += p_kw * dt_h;
-    g_e_reactive_kvarh += q_kvar * dt_h;
-    g_e_apparent_kvah += s_kva * dt_h;
-}
+static sm_ctx_t g_sm;
 
-static int sm_list_instances(anjay_t *anjay, const anjay_dm_object_def_t *const *def,
-                             anjay_dm_list_ctx_t *ctx) {
+static int list_instances(anjay_t *anjay, const anjay_dm_object_def_t *const *def,
+                          anjay_dm_list_ctx_t *ctx) {
     (void) anjay; (void) def;
     anjay_dm_emit(ctx, 0);
     return 0;
 }
 
-static int sm_list_resources(anjay_t *anjay, const anjay_dm_object_def_t *const *def,
-                             anjay_iid_t iid, anjay_dm_resource_list_ctx_t *ctx) {
+static int list_resources(anjay_t *anjay, const anjay_dm_object_def_t *const *def,
+                          anjay_iid_t iid, anjay_dm_resource_list_ctx_t *ctx) {
     (void) anjay; (void) def; (void) iid;
+    ESP_LOGD(TAG_SM, "list_resources for /%d/%u", OID_SMART_METER, (unsigned) iid);
     // Identification
-    anjay_dm_emit_res(ctx, 0, ANJAY_DM_RES_R, ANJAY_DM_RES_PRESENT); // Manufacturer
-    anjay_dm_emit_res(ctx, 1, ANJAY_DM_RES_R, ANJAY_DM_RES_PRESENT); // Model Number
-    anjay_dm_emit_res(ctx, 2, ANJAY_DM_RES_R, ANJAY_DM_RES_PRESENT); // Serial Number
-    anjay_dm_emit_res(ctx, 3, ANJAY_DM_RES_R, ANJAY_DM_RES_PRESENT); // Description
-    // Electrical measurements
-    anjay_dm_emit_res(ctx, 4, ANJAY_DM_RES_R, ANJAY_DM_RES_PRESENT); // Tension (Voltage)
-    anjay_dm_emit_res(ctx, 5, ANJAY_DM_RES_R, ANJAY_DM_RES_PRESENT); // Current
-    anjay_dm_emit_res(ctx, 6, ANJAY_DM_RES_R, ANJAY_DM_RES_PRESENT); // Active Power
-    anjay_dm_emit_res(ctx, 7, ANJAY_DM_RES_R, ANJAY_DM_RES_PRESENT); // Reactive Power
-    anjay_dm_emit_res(ctx, 8, ANJAY_DM_RES_R, ANJAY_DM_RES_PRESENT); // Inductive Reactive Power
-    anjay_dm_emit_res(ctx, 9, ANJAY_DM_RES_R, ANJAY_DM_RES_PRESENT); // Capacitive Reactive Power
-    anjay_dm_emit_res(ctx, 10, ANJAY_DM_RES_R, ANJAY_DM_RES_PRESENT); // Apparent Power
-    anjay_dm_emit_res(ctx, 11, ANJAY_DM_RES_R, ANJAY_DM_RES_PRESENT); // Power Factor
-    anjay_dm_emit_res(ctx, 12, ANJAY_DM_RES_R, ANJAY_DM_RES_PRESENT); // THD-V
-    anjay_dm_emit_res(ctx, 13, ANJAY_DM_RES_R, ANJAY_DM_RES_PRESENT); // THD-A
-    anjay_dm_emit_res(ctx, 14, ANJAY_DM_RES_R, ANJAY_DM_RES_PRESENT); // Active Energy
-    anjay_dm_emit_res(ctx, 15, ANJAY_DM_RES_R, ANJAY_DM_RES_PRESENT); // Reactive Energy
-    anjay_dm_emit_res(ctx, 16, ANJAY_DM_RES_R, ANJAY_DM_RES_PRESENT); // Apparent Energy
-    anjay_dm_emit_res(ctx, 17, ANJAY_DM_RES_R, ANJAY_DM_RES_PRESENT); // Frequency
+    anjay_dm_emit_res(ctx, RID_MANUFACTURER, ANJAY_DM_RES_R, ANJAY_DM_RES_PRESENT);
+    anjay_dm_emit_res(ctx, RID_MODEL_NUMBER, ANJAY_DM_RES_R, ANJAY_DM_RES_PRESENT);
+    anjay_dm_emit_res(ctx, RID_SERIAL_NUMBER, ANJAY_DM_RES_R, ANJAY_DM_RES_PRESENT);
+    anjay_dm_emit_res(ctx, RID_DESCRIPTION, ANJAY_DM_RES_R, ANJAY_DM_RES_PRESENT);
+    // Measurements
+    anjay_dm_emit_res(ctx, RID_TENSION, ANJAY_DM_RES_R, ANJAY_DM_RES_PRESENT);
+    anjay_dm_emit_res(ctx, RID_CURRENT, ANJAY_DM_RES_R, ANJAY_DM_RES_PRESENT);
+    anjay_dm_emit_res(ctx, RID_ACTIVE_POWER, ANJAY_DM_RES_R, ANJAY_DM_RES_PRESENT);
+    anjay_dm_emit_res(ctx, RID_REACTIVE_POWER, ANJAY_DM_RES_R, ANJAY_DM_RES_PRESENT);
+    anjay_dm_emit_res(ctx, RID_INDUCTIVE_REACTIVE_POWER, ANJAY_DM_RES_R, ANJAY_DM_RES_PRESENT);
+    anjay_dm_emit_res(ctx, RID_CAPACITIVE_REACTIVE_POWER, ANJAY_DM_RES_R, ANJAY_DM_RES_PRESENT);
+    anjay_dm_emit_res(ctx, RID_APPARENT_POWER, ANJAY_DM_RES_R, ANJAY_DM_RES_PRESENT);
+    anjay_dm_emit_res(ctx, RID_POWER_FACTOR, ANJAY_DM_RES_R, ANJAY_DM_RES_PRESENT);
+    anjay_dm_emit_res(ctx, RID_THD_V, ANJAY_DM_RES_R, ANJAY_DM_RES_PRESENT);
+    anjay_dm_emit_res(ctx, RID_THD_A, ANJAY_DM_RES_R, ANJAY_DM_RES_PRESENT);
+    anjay_dm_emit_res(ctx, RID_ACTIVE_ENERGY, ANJAY_DM_RES_R, ANJAY_DM_RES_PRESENT);
+    anjay_dm_emit_res(ctx, RID_REACTIVE_ENERGY, ANJAY_DM_RES_R, ANJAY_DM_RES_PRESENT);
+    anjay_dm_emit_res(ctx, RID_APPARENT_ENERGY, ANJAY_DM_RES_R, ANJAY_DM_RES_PRESENT);
+    anjay_dm_emit_res(ctx, RID_FREQUENCY, ANJAY_DM_RES_R, ANJAY_DM_RES_PRESENT);
     return 0;
 }
 
-static int sm_read(anjay_t *anjay, const anjay_dm_object_def_t *const *def,
-                   anjay_iid_t iid, anjay_rid_t rid, anjay_riid_t riid,
-                   anjay_output_ctx_t *out_ctx) {
-    (void) anjay; (void) def; (void) iid; (void) riid;
+static int resource_read(anjay_t *anjay, const anjay_dm_object_def_t *const *def,
+                         anjay_iid_t iid, anjay_rid_t rid, anjay_riid_t riid,
+                         anjay_output_ctx_t *ctx) {
+    (void) anjay; (void) iid; (void) riid;
+    sm_ctx_t *obj = AVS_CONTAINER_OF(def, sm_ctx_t, def);
+    ESP_LOGD(TAG_SM, "read /%d/%u/%u", OID_SMART_METER, (unsigned) iid, (unsigned) rid);
     switch (rid) {
-    case 0: return anjay_ret_string(out_ctx, "Acme Power");
-    case 1: return anjay_ret_string(out_ctx, "ESP32C6-Meter");
-    case 2: return anjay_ret_string(out_ctx, "SN-0001");
-    case 3: return anjay_ret_string(out_ctx, "Single-Phase Power Meter");
-    case 4: { // Voltage (V)
-        float v; read_instantaneous(&v, NULL, NULL, NULL);
-        return anjay_ret_float(out_ctx, v);
-    }
-    case 5: { // Current (A)
-        float i; read_instantaneous(NULL, &i, NULL, NULL);
-        return anjay_ret_float(out_ctx, i);
-    }
-    case 6: { // Active Power (kW)
-        float v,i,pf; read_instantaneous(&v, &i, &pf, NULL);
-        return anjay_ret_float(out_ctx, active_power_kw(v, i, pf));
-    }
-    case 7: { // Reactive Power (kvar)
-        float v,i,pf; read_instantaneous(&v, &i, &pf, NULL);
-        return anjay_ret_float(out_ctx, reactive_power_kvar(v, i, pf));
-    }
-    case 8: { // Inductive Reactive Power (kvar)
-        float v,i,pf; read_instantaneous(&v, &i, &pf, NULL);
-        float q = reactive_power_kvar(v, i, pf);
-        return anjay_ret_float(out_ctx, q);
-    }
-    case 9: { // Capacitive Reactive Power (kvar)
-        return anjay_ret_float(out_ctx, 0.0f);
-    }
-    case 10: { // Apparent Power (kVA)
-        float v,i; read_instantaneous(&v, &i, NULL, NULL);
-        return anjay_ret_float(out_ctx, apparent_power_kva(v, i));
-    }
-    case 11: { // Power Factor (-1..1)
-        float pf; read_instantaneous(NULL, NULL, &pf, NULL);
-        return anjay_ret_float(out_ctx, pf);
-    }
-    case 12: { // THD-V (/100)
-        return anjay_ret_float(out_ctx, 0.03f);
-    }
-    case 13: { // THD-A (/100)
-        return anjay_ret_float(out_ctx, 0.05f);
-    }
-    case 14: { // Active Energy (kWh)
-        update_energy_accumulators();
-        return anjay_ret_double(out_ctx, g_e_active_kwh);
-    }
-    case 15: { // Reactive Energy (kvarh)
-        update_energy_accumulators();
-        return anjay_ret_double(out_ctx, g_e_reactive_kvarh);
-    }
-    case 16: { // Apparent Energy (kVAh)
-        update_energy_accumulators();
-        return anjay_ret_double(out_ctx, g_e_apparent_kvah);
-    }
-    case 17: { // Frequency (Hz)
-        float f; read_instantaneous(NULL, NULL, NULL, &f);
-        return anjay_ret_float(out_ctx, f);
-    }
+    // Identification
+    case RID_MANUFACTURER:
+        return anjay_ret_string(ctx, obj->manufacturer);
+    case RID_MODEL_NUMBER:
+        return anjay_ret_string(ctx, obj->model_number);
+    case RID_SERIAL_NUMBER:
+        return anjay_ret_string(ctx, obj->serial_number);
+    case RID_DESCRIPTION:
+        return anjay_ret_string(ctx, obj->description);
+
+    // Measurements
+    case RID_TENSION:
+        return anjay_ret_float(ctx, obj->voltage_v);
+    case RID_CURRENT:
+        return anjay_ret_float(ctx, obj->current_a);
+    case RID_ACTIVE_POWER:
+        return anjay_ret_float(ctx, obj->active_power_kw);
+    case RID_REACTIVE_POWER:
+        return anjay_ret_float(ctx, obj->reactive_power_kvar);
+    case RID_INDUCTIVE_REACTIVE_POWER:
+        return anjay_ret_float(ctx, obj->inductive_reactive_power_kvar);
+    case RID_CAPACITIVE_REACTIVE_POWER:
+        return anjay_ret_float(ctx, obj->capacitive_reactive_power_kvar);
+    case RID_APPARENT_POWER:
+        return anjay_ret_float(ctx, obj->apparent_power_kva);
+    case RID_POWER_FACTOR:
+        return anjay_ret_float(ctx, obj->power_factor);
+    case RID_THD_V:
+        return anjay_ret_float(ctx, obj->thd_v);
+    case RID_THD_A:
+        return anjay_ret_float(ctx, obj->thd_a);
+    case RID_ACTIVE_ENERGY:
+        return anjay_ret_float(ctx, obj->active_energy_kwh);
+    case RID_REACTIVE_ENERGY:
+        return anjay_ret_float(ctx, obj->reactive_energy_kvarh);
+    case RID_APPARENT_ENERGY:
+        return anjay_ret_float(ctx, obj->apparent_energy_kvah);
+    case RID_FREQUENCY:
+        return anjay_ret_float(ctx, obj->frequency_hz);
     default:
         return ANJAY_ERR_METHOD_NOT_ALLOWED;
     }
 }
 
-static const anjay_dm_object_def_t OBJ10243 = {
-    .oid = 10243,
+// All resources are read-only according to the provided table; no write/exec handlers
+
+static const anjay_dm_object_def_t OBJ_DEF = {
+    .oid = OID_SMART_METER,
+    .version = "2.0",
     .handlers = {
-        .list_instances = sm_list_instances,
-        .list_resources = sm_list_resources,
-        .resource_read = sm_read,
+        .list_instances = list_instances,
+        .list_resources = list_resources,
+        .resource_read = resource_read,
+        .resource_write = NULL,
+        .resource_execute = NULL,
     }
 };
 
-static const anjay_dm_object_def_t *const OBJ10243_DEF = &OBJ10243;
+const anjay_dm_object_def_t *const *smart_meter_object_create(void) {
+    memset(&g_sm, 0, sizeof(g_sm));
+    g_sm.def = &OBJ_DEF;
+    // Identification defaults
+    strncpy(g_sm.manufacturer, "ACME Power", sizeof(g_sm.manufacturer) - 1);
+    strncpy(g_sm.model_number, "SPM-1PH", sizeof(g_sm.model_number) - 1);
+    strncpy(g_sm.serial_number, "SN12345678", sizeof(g_sm.serial_number) - 1);
+    strncpy(g_sm.description, "Single-phase smart meter", sizeof(g_sm.description) - 1);
 
-const anjay_dm_object_def_t *const *smart_meter_object_def(void) {
-    return &OBJ10243_DEF;
+    // Electrical defaults
+    g_sm.voltage_v = 230.0f;
+    g_sm.current_a = 0.50f;
+    g_sm.power_factor = 0.90f;
+    g_sm.frequency_hz = 60.0f;
+
+    // Derived powers (kW/kvar/kVA)
+    const float s_kva = (g_sm.voltage_v * g_sm.current_a) / 1000.0f;
+    const float p_kw = s_kva * g_sm.power_factor;
+    const float q_kvar = s_kva * sqrtf(fmaxf(0.0f, 1.0f - g_sm.power_factor * g_sm.power_factor));
+    g_sm.apparent_power_kva = s_kva;
+    g_sm.active_power_kw = p_kw;
+    g_sm.reactive_power_kvar = q_kvar;
+    g_sm.inductive_reactive_power_kvar = q_kvar; // assume inductive load
+    g_sm.capacitive_reactive_power_kvar = 0.0f;
+
+    // Energies start at 0
+    g_sm.active_energy_kwh = 0.0f;
+    g_sm.reactive_energy_kvarh = 0.0f;
+    g_sm.apparent_energy_kvah = 0.0f;
+
+    // THD (fractions)
+    g_sm.thd_v = 0.02f; // 2%
+    g_sm.thd_a = 0.03f; // 3%
+
+    g_sm.last_update = xTaskGetTickCount();
+    ESP_LOGI(TAG_SM, "Smart Meter(10243) created");
+    return &g_sm.def;
 }
 
+void smart_meter_object_release(const anjay_dm_object_def_t *const *obj) {
+    (void) obj; // static instance; nothing to free
+}
+
+void smart_meter_object_update(anjay_t *anjay, const anjay_dm_object_def_t *const *obj) {
+    (void) obj;
+    if (!anjay) { return; }
+    const TickType_t now = xTaskGetTickCount();
+    if ((now - g_sm.last_update) < pdMS_TO_TICKS(1000)) {
+        return;
+    }
+    g_sm.last_update = now;
+
+    float t = (float)(now % (120000)) / 1000.0f; // 2-minute cycle
+    // Simulate small variations
+    float new_freq = 60.0f + 0.05f * sinf(t * 0.2f);
+    float new_voltage = 230.0f + 2.5f * sinf(t * 0.7f);
+    float new_pf = 0.90f + 0.05f * sinf(t * 0.5f);
+    new_pf = fminf(fmaxf(new_pf, -1.0f), 1.0f);
+    float load_profile = 0.4f + 0.3f * (0.5f + 0.5f * sinf(t));
+    float new_current = load_profile; // A
+
+    // Apparent power (kVA), Active (kW), Reactive (kvar)
+    const float s_kva = (new_voltage * new_current) / 1000.0f;
+    const float p_kw = s_kva * new_pf;
+    const float q_kvar_mag = s_kva * sqrtf(fmaxf(0.0f, 1.0f - new_pf * new_pf));
+    // Assume inductive when sin component positive; simplistic split
+    bool inductive = sinf(t * 0.3f) >= 0.0f;
+    float new_q_kvar = q_kvar_mag * (inductive ? 1.0f : -1.0f);
+    float new_q_ind_kvar = inductive ? q_kvar_mag : 0.0f;
+    float new_q_cap_kvar = inductive ? 0.0f : q_kvar_mag;
+
+    // Integrate energies (kWh, kvarh, kVAh)
+    const float dt_hours = 1.0f / 3600.0f; // ~1 second
+    float new_e_kwh = g_sm.active_energy_kwh + (p_kw * dt_hours);
+    float new_e_kvarh = g_sm.reactive_energy_kvarh + (fabsf(new_q_kvar) * dt_hours);
+    float new_e_kvah = g_sm.apparent_energy_kvah + (s_kva * dt_hours);
+
+    // THD variations
+    float new_thd_v = 0.02f + 0.005f * sinf(t * 0.11f);
+    float new_thd_a = 0.03f + 0.008f * sinf(t * 0.09f + 0.5f);
+
+    // Change detection
+    bool ch_freq = fabsf(new_freq - g_sm.frequency_hz) > 0.001f;
+    bool ch_volt = fabsf(new_voltage - g_sm.voltage_v) > 0.01f;
+    bool ch_pf   = fabsf(new_pf - g_sm.power_factor) > 0.001f;
+    bool ch_curr = fabsf(new_current - g_sm.current_a) > 0.001f;
+    bool ch_pkw  = fabsf(p_kw - g_sm.active_power_kw) > 0.001f;
+    bool ch_q    = fabsf(new_q_kvar - g_sm.reactive_power_kvar) > 0.001f;
+    bool ch_qi   = fabsf(new_q_ind_kvar - g_sm.inductive_reactive_power_kvar) > 0.001f;
+    bool ch_qc   = fabsf(new_q_cap_kvar - g_sm.capacitive_reactive_power_kvar) > 0.001f;
+    bool ch_s    = fabsf(s_kva - g_sm.apparent_power_kva) > 0.001f;
+    bool ch_e    = fabsf(new_e_kwh - g_sm.active_energy_kwh) > 0.0001f;
+    bool ch_eq   = fabsf(new_e_kvarh - g_sm.reactive_energy_kvarh) > 0.0001f;
+    bool ch_es   = fabsf(new_e_kvah - g_sm.apparent_energy_kvah) > 0.0001f;
+    bool ch_thdv = fabsf(new_thd_v - g_sm.thd_v) > 0.0001f;
+    bool ch_thda = fabsf(new_thd_a - g_sm.thd_a) > 0.0001f;
+
+    // Apply
+    g_sm.frequency_hz = new_freq;
+    g_sm.voltage_v = new_voltage;
+    g_sm.power_factor = new_pf;
+    g_sm.current_a = new_current;
+    g_sm.active_power_kw = p_kw;
+    g_sm.reactive_power_kvar = new_q_kvar;
+    g_sm.inductive_reactive_power_kvar = new_q_ind_kvar;
+    g_sm.capacitive_reactive_power_kvar = new_q_cap_kvar;
+    g_sm.apparent_power_kva = s_kva;
+    g_sm.active_energy_kwh = new_e_kwh;
+    g_sm.reactive_energy_kvarh = new_e_kvarh;
+    g_sm.apparent_energy_kvah = new_e_kvah;
+    g_sm.thd_v = new_thd_v;
+    g_sm.thd_a = new_thd_a;
+
+    // Notifications
+    if (ch_volt) anjay_notify_changed(anjay, OID_SMART_METER, 0, RID_TENSION);
+    if (ch_curr) anjay_notify_changed(anjay, OID_SMART_METER, 0, RID_CURRENT);
+    if (ch_pkw)  anjay_notify_changed(anjay, OID_SMART_METER, 0, RID_ACTIVE_POWER);
+    if (ch_q)    anjay_notify_changed(anjay, OID_SMART_METER, 0, RID_REACTIVE_POWER);
+    if (ch_qi)   anjay_notify_changed(anjay, OID_SMART_METER, 0, RID_INDUCTIVE_REACTIVE_POWER);
+    if (ch_qc)   anjay_notify_changed(anjay, OID_SMART_METER, 0, RID_CAPACITIVE_REACTIVE_POWER);
+    if (ch_s)    anjay_notify_changed(anjay, OID_SMART_METER, 0, RID_APPARENT_POWER);
+    if (ch_pf)   anjay_notify_changed(anjay, OID_SMART_METER, 0, RID_POWER_FACTOR);
+    if (ch_thdv) anjay_notify_changed(anjay, OID_SMART_METER, 0, RID_THD_V);
+    if (ch_thda) anjay_notify_changed(anjay, OID_SMART_METER, 0, RID_THD_A);
+    if (ch_e)    anjay_notify_changed(anjay, OID_SMART_METER, 0, RID_ACTIVE_ENERGY);
+    if (ch_eq)   anjay_notify_changed(anjay, OID_SMART_METER, 0, RID_REACTIVE_ENERGY);
+    if (ch_es)   anjay_notify_changed(anjay, OID_SMART_METER, 0, RID_APPARENT_ENERGY);
+    if (ch_freq) anjay_notify_changed(anjay, OID_SMART_METER, 0, RID_FREQUENCY);
+}
