@@ -308,15 +308,15 @@ static void build_final_server_uri(char *out, size_t out_size) {
         } else {
             // Could not resolve hostname; use it as literal (may or may not route)
             host = configured_host;
-            ESP_LOGW(TAG, "DNS resolution failed for '%s'; using literal host", configured_host);
+            //ESP_LOGW(TAG, "DNS resolution failed for '%s'; using literal host", configured_host);
             // Optional fallback: if a gateway IP is present, you may enable the following
             // to try the gateway as a last resort in environments where server==gateway.
             // NOTE: This is disabled for literal IPv4 and for clarity; uncomment only if desired.
-            // char gw[32] = {0};
-            // if (get_gateway_ipv4(gw, sizeof(gw))) {
-            //     ESP_LOGW(TAG, "Falling back to gateway IP %s for server host", gw);
-            //     host = gw;
-            // }
+            char gw[32] = {0};
+            if (get_gateway_ipv4(gw, sizeof(gw))) {
+                ESP_LOGW(TAG, "Falling back to gateway IP %s for server host", gw);
+                host = gw;
+            }
         }
     } else {
         host = "127.0.0.1";
