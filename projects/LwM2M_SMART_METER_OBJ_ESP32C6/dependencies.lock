@@ -7,24 +7,13 @@ dependencies:
       path: components/anjay-esp-idf
       type: git
     version: da4624a1849053e7c2e6ea8eb4266aa8d7cfa2f1
-  espressif/led_strip:
-    component_hash: 223998f10cae6d81f2ad2dd3c1103c2221be298c708e37917482b0153f3ec64e
-    dependencies:
-    - name: idf
-      require: private
-      version: '>=5.0'
-    source:
-      registry_url: https://components.espressif.com/
-      type: service
-    version: 3.0.1~1
   idf:
     source:
       type: idf
     version: 5.4.1
 direct_dependencies:
 - anjay-esp-idf
-- espressif/led_strip
 - idf
-manifest_hash: 94ee25bc424d1fe75a98a0ffe0f036d6c409b98bcac41b016af083d8b9386bf8
+manifest_hash: b3749f62af436bf0956052ebe6c882f6c6aa14925228d64e013c8dbfb5ac38d3
 target: esp32c6
 version: 2.0.0

@@ -105,17 +105,6 @@ endmenu
 
 menu "Board Features"
 
-config BOARD_HAS_WS2812
-    bool "Board has a single WS2812 RGB LED"
-    default y
-
-config BOARD_WS2812_GPIO
-    int "WS2812 data GPIO"
-    depends on BOARD_HAS_WS2812
-    default 8
-    range 0 30
-    help
-        ESP32-C6-DevKitC-1 usa GPIO8 para el LED RGB integrado.
 
 config BOARD_BOOT_BUTTON_GPIO
     int "Boot/Factory Reset button GPIO"
@@ -133,13 +122,6 @@ endmenu
 
 menu "LwM2M APP"
 
-config EXAMPLE_WIFI_SSID
-    string "WiFi SSID"
-    default ""
-
-config EXAMPLE_WIFI_PASSWORD
-    string "WiFi Password"
-    default ""
 
 config EXAMPLE_MAXIMUM_RETRY
     int "Maximum WiFi reconnect retries"
@@ -180,7 +162,7 @@ config LWM2M_OVERRIDE_HOSTNAME_ENABLE
 config LWM2M_OVERRIDE_HOSTNAME
     string "Hostname to resolve for LwM2M server"
     depends on LWM2M_OVERRIDE_HOSTNAME_ENABLE
-    default "192.168.3.100"
+    default "thingsboard.edge"
     help
         Hostname that will be resolved on startup and used as the server IP.
         Example: thingsboard.edge.play
@@ -192,7 +174,7 @@ config LWM2M_BOOTSTRAP
 config LWM2M_BOOTSTRAP_URI
     string "Bootstrap Server URI (coap(s)://host:port)"
     depends on LWM2M_BOOTSTRAP
-    default "coap://192.168.3.100:5683"
+    default "coap://thingsboard.edge:5683"
 
 config LWM2M_SECURITY_PSK_ID
     string "DTLS PSK Identity (if coaps)"
@@ -240,33 +222,35 @@ config LWM2M_MSG_CACHE_SIZE
 
 endmenu
 
-menu "Time Sync (SNTP)"
 
-config SNTP_ENABLE
-    bool "Enable SNTP time sync for epoch timestamps"
+menu "GeoIP (Approximate Location)"
+
+config GEOLOC_ENABLE
+    bool "Enable GeoIP-based initial location"
     default y
     help
-        Initialize SNTP at startup to obtain real epoch time for resources like
-        Location Timestamp. If disabled, a monotonic tick-based fallback is used.
+        On startup, fetch approximate latitude/longitude from a GeoIP API
+        and initialize Location (Object 6) with those values.
 
-config SNTP_SERVER
-    string "SNTP server hostname"
-    depends on SNTP_ENABLE
-    default "pool.ntp.org"
-
-config SNTP_TZ
-    string "POSIX timezone (TZ)"
-    depends on SNTP_ENABLE
-    default "UTC0"
+config GEOLOC_USE_SERVER_HOST
+    bool "Use LwM2M server hostname/IP for geolocation"
+    depends on GEOLOC_ENABLE
+    default n
     help
-        POSIX TZ string, e.g., "UTC0", "CST-6", "CET-1CEST,M3.5.0/2,M10.5.0/3"
+        If enabled, query GeoIP for the configured LwM2M server hostname/IP.
+        If disabled, query GeoIP without parameter to geolocate the device's
+        public IP as seen by the GeoIP service.
 
-config SNTP_MIN_VALID_EPOCH
-    int "Minimum valid epoch (seconds since 1970)"
-    depends on SNTP_ENABLE
-    default 1609459200
+config GEOLOC_BASE_URL
+    string "GeoIP base URL"
+    depends on GEOLOC_ENABLE
+    default "http://ip-api.com/json"
     help
-        Ignore time() values earlier than this (default: 2021-01-01) to avoid
-        using invalid timestamps before SNTP synchronization completes.
+        Base URL of the GeoIP service. For example:
+          - http://ip-api.com/json
+          - http://ip-api.com/json/<host or ip>
+        If GEOLOC_USE_SERVER_HOST is enabled, the host/IP will be appended.
 
 endmenu
+
+# Smart Meter Simulation menu removed; observation cadence is controlled by LwM2M pmin/pmax.

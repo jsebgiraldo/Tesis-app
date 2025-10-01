@@ -4,18 +4,15 @@
 #include <stdbool.h>
 #include <time.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <sys/time.h>
 #include <esp_log.h>
-#if __has_include(<esp_sntp.h>)
-#include <esp_sntp.h>
-#define HAS_ESP_SNTP 1
-#elif __has_include(<lwip/apps/sntp.h>)
-#include <lwip/apps/sntp.h>
-#define HAS_LWIP_SNTP 1
-#endif
+#include <esp_http_client.h>
+#include <cJSON.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <anjay/io.h>
+// SNTP removed: no time sync initialization here. We rely on system time if valid, otherwise monotonic ticks.
 
 #define OID_LOCATION 6
 #define RID_LATITUDE 0
@@ -30,60 +27,81 @@ typedef struct {
     float longitude;  // degrees
     int64_t timestamp; // seconds since epoch
 } location_ctx_t;
+#ifdef CONFIG_GEOLOC_ENABLE
+// Optional: try to get approximate lat/lon from a GeoIP service
+static void geolocate_initial(float *lat_out, float *lon_out) {
+    if (!lat_out || !lon_out) { return; }
+    char url[192] = {0};
+#if CONFIG_GEOLOC_USE_SERVER_HOST
+    // get server resolved host from Kconfig
+#if CONFIG_LWM2M_OVERRIDE_HOSTNAME_ENABLE
+    const char *host = CONFIG_LWM2M_OVERRIDE_HOSTNAME;
+#else
+    const char *host = "";
+#endif
+    if (host && host[0]) {
+        snprintf(url, sizeof(url), "%s/%s", CONFIG_GEOLOC_BASE_URL, host);
+    } else {
+        snprintf(url, sizeof(url), "%s", CONFIG_GEOLOC_BASE_URL);
+    }
+#else
+    snprintf(url, sizeof(url), "%s", CONFIG_GEOLOC_BASE_URL);
+#endif
 
-// --- Time handling: prefer SNTP epoch if available, fallback to monotonic ticks ---
+    esp_http_client_config_t cfg = {
+        .url = url,
+        .timeout_ms = 4000,
+        .method = HTTP_METHOD_GET,
+    };
+    esp_http_client_handle_t client = esp_http_client_init(&cfg);
+    if (!client) { return; }
+    if (esp_http_client_open(client, 0) == ESP_OK) {
+        // Fetch headers (optional) then read response into a local buffer
+        (void) esp_http_client_fetch_headers(client);
+        char buf[2048];
+        int r = esp_http_client_read_response(client, buf, sizeof(buf) - 1);
+        if (r >= 0) {
+            buf[r] = '\0';
+            int status = esp_http_client_get_status_code(client);
+            if (status >= 200 && status < 300) {
+                cJSON *root = cJSON_Parse(buf);
+                if (root) {
+                    const cJSON *lat = cJSON_GetObjectItemCaseSensitive(root, "lat");
+                    const cJSON *lon = cJSON_GetObjectItemCaseSensitive(root, "lon");
+                    if (cJSON_IsNumber(lat) && cJSON_IsNumber(lon)) {
+                        *lat_out = (float) lat->valuedouble;
+                        *lon_out = (float) lon->valuedouble;
+                        ESP_LOGI(TAG_LOC, "GeoIP: lat=%.6f lon=%.6f", (double) *lat_out, (double) *lon_out);
+                    } else {
+                        ESP_LOGW(TAG_LOC, "GeoIP JSON missing lat/lon");
+                    }
+                    cJSON_Delete(root);
+                } else {
+                    ESP_LOGW(TAG_LOC, "GeoIP: JSON parse failed");
+                }
+            } else {
+                ESP_LOGW(TAG_LOC, "GeoIP HTTP status: %d", status);
+            }
+        } else {
+            ESP_LOGW(TAG_LOC, "GeoIP: read_response failed (%d)", r);
+        }
+        esp_http_client_close(client);
+    }
+    esp_http_client_cleanup(client);
+}
+#endif
+
+// --- Time handling: prefer real epoch if available, fallback to monotonic ticks ---
 static inline int64_t platform_time_seconds(void) {
     time_t now = 0;
     time(&now);
-#ifdef CONFIG_SNTP_ENABLE
-    if (now >= (time_t) CONFIG_SNTP_MIN_VALID_EPOCH) {
+    const time_t MIN_VALID_EPOCH = (time_t) 1609459200; // 2021-01-01
+    if (now >= MIN_VALID_EPOCH) {
         return (int64_t) now;
     }
-#endif
     // Fallback: monotonic seconds from FreeRTOS tick (not real epoch)
     return (int64_t) (xTaskGetTickCount() / configTICK_RATE_HZ);
 }
-
-#if defined(CONFIG_SNTP_ENABLE) && defined(HAS_ESP_SNTP)
-static void time_sync_notification_cb(struct timeval *tv) {
-    (void) tv;
-    time_t now = 0;
-    time(&now);
-    ESP_LOGI(TAG_LOC, "SNTP time synchronized: %lld", (long long) now);
-}
-
-static void sntp_init_nonblocking(void) {
-    static bool initialized = false;
-    if (initialized) {
-        return;
-    }
-    initialized = true;
-
-    ESP_LOGI(TAG_LOC, "Initializing SNTP: server='%s' TZ='%s'", CONFIG_SNTP_SERVER, CONFIG_SNTP_TZ);
-
-    // Set timezone from Kconfig
-    setenv("TZ", CONFIG_SNTP_TZ, 1);
-    tzset();
-
-    // Configure and start SNTP (poll mode)
-    sntp_setoperatingmode(SNTP_OPMODE_POLL);
-    sntp_set_time_sync_notification_cb(time_sync_notification_cb);
-    sntp_setservername(0, CONFIG_SNTP_SERVER);
-    sntp_init();
-}
-#elif defined(CONFIG_SNTP_ENABLE) && defined(HAS_LWIP_SNTP)
-static void sntp_init_nonblocking(void) {
-    static bool initialized = false;
-    if (initialized) { return; }
-    initialized = true;
-    ESP_LOGI(TAG_LOC, "Initializing SNTP (lwIP): server='%s' TZ='%s'", CONFIG_SNTP_SERVER, CONFIG_SNTP_TZ);
-    setenv("TZ", CONFIG_SNTP_TZ, 1);
-    tzset();
-    sntp_setoperatingmode(SNTP_OPMODE_POLL);
-    sntp_setservername(0, CONFIG_SNTP_SERVER);
-    sntp_init();
-}
-#endif // CONFIG_SNTP_ENABLE
 
 static int list_instances(anjay_t *anjay, const anjay_dm_object_def_t *const *def,
                           anjay_dm_list_ctx_t *ctx) {
@@ -146,10 +164,14 @@ static location_ctx_t g_loc = {
 };
 
 const anjay_dm_object_def_t **location_object_create(void) {
-#ifdef CONFIG_SNTP_ENABLE
-    sntp_init_nonblocking();
-#endif
     g_loc.timestamp = platform_time_seconds();
+#ifdef CONFIG_GEOLOC_ENABLE
+    float lat = g_loc.latitude;
+    float lon = g_loc.longitude;
+    geolocate_initial(&lat, &lon);
+    g_loc.latitude = lat;
+    g_loc.longitude = lon;
+#endif
     ESP_LOGI(TAG_LOC, "Location(6) created: lat=%.6f lon=%.6f ts=%lld", (double) g_loc.latitude, (double) g_loc.longitude, (long long) g_loc.timestamp);
     return &g_loc.def;
 }

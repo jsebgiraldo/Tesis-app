@@ -1,17 +1,7 @@
-// LED status driver for a single WS2812 (NeoPixel) RGB LED
+// LED module removed intentionally. Keep minimal stub to satisfy includes.
 #pragma once
-#include <stdint.h>
-
-typedef enum {
-    LED_MODE_OFF = 0,
-    LED_MODE_FACTORY_RESET,   // red fast blink
-    LED_MODE_PROV_BLE,        // blue breathing
-    LED_MODE_WIFI_CONNECTED,  // solid green
-    LED_MODE_WIFI_FAIL,       // amber blink (red+green)
-} led_mode_t;
-
-void led_status_init(void);
-void led_status_set_mode(led_mode_t mode);
-void led_status_get_color(uint8_t* r, uint8_t* g, uint8_t* b);
-// Immediately switch off the LED and set mode to OFF
-void led_status_force_off(void);
+typedef enum { LED_MODE_OFF = 0 } led_mode_t;
+static inline void led_status_init(void) {}
+static inline void led_status_set_mode(led_mode_t mode) { (void) mode; }
+static inline void led_status_get_color(unsigned char* r, unsigned char* g, unsigned char* b) { if (r) *r=0; if (g) *g=0; if (b) *b=0; }
+static inline void led_status_force_off(void) {}

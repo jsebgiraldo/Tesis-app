@@ -6,26 +6,17 @@
 extern "C" {
 #endif
 
-// Custom Smart Meter (Object ID 10243)
-// Resource IDs per design:
-//   0 Manufacturer (string)
-//   1 Model Number (string)
-//   2 Serial Number (string)
-//   3 Description (string)
-//   4 Voltage/Tension (float V)
-//   5 Current (float A) [Mandatory]
-//   6 Active Power (float kW)
-//   7 Reactive Power (float kvar)
-//   8 Inductive Reactive Power (float kvar)
-//   9 Capacitive Reactive Power (float kvar)
-//  10 Apparent Power (float kVA)
-//  11 Power Factor (float -1..1)
-//  12 THD-V (float /100)
-//  13 THD-A (float /100)
-//  14 Active Energy (float kWh)
-//  15 Reactive Energy (float kvarh)
-//  16 Apparent Energy (float kVAh)
-//  17 Frequency (float Hz)
+// Custom Single Phase Power Meter (Object ID 10243)
+// Example resources (subset):
+//  - 5600 Voltage (V) float
+//  - 5601 Current (A) float
+//  - 5700 Active Power (W) float
+//  - 5805 Power Factor float
+//  - 5701 Units (string) for 5700
+//  - 5800 Energy (kWh) float (cumulative)
+//  - 5850 On/Off (bool) RW (simulated load enable)
+//  - 5822 Frequency (Hz) float
+//  - 5605 Reset Cumulative Energy (Exec)
 
 const anjay_dm_object_def_t *const *smart_meter_object_create(void);
 void smart_meter_object_release(const anjay_dm_object_def_t *const *obj);

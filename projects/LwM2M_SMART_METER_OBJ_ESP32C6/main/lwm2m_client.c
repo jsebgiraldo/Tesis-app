@@ -74,6 +74,26 @@ static const char *resolve_endpoint_name(void) {
     return g_endpoint_name;
 }
 
+// Try to obtain the default gateway IPv4 address as a string.
+// Returns true on success and writes into ip_out.
+static bool get_gateway_ipv4(char *ip_out, size_t ip_out_size) {
+    if (!ip_out || ip_out_size < 8) {
+        return false;
+    }
+    esp_netif_t *netif = esp_netif_get_default_netif();
+    if (!netif) {
+        return false;
+    }
+    esp_netif_ip_info_t ip_info;
+    if (esp_netif_get_ip_info(netif, &ip_info) != ESP_OK) {
+        return false;
+    }
+    struct in_addr ina;
+    ina.s_addr = ip_info.gw.addr; // IPv4 gateway
+    const char *s = inet_ntop(AF_INET, &ina, ip_out, (socklen_t) ip_out_size);
+    return (s && *s);
+}
+
 static bool resolve_hostname_ipv4(const char *hostname, char *ip_out, size_t ip_out_size) {
     if (!hostname || !*hostname || !ip_out || ip_out_size < 8) {
         return false;
@@ -109,19 +129,23 @@ static void build_final_server_uri(char *out, size_t out_size) {
     int port = (int) CONFIG_LWM2M_SERVER_PORT;
     char resolved_ip[48] = {0};
     const char *host = NULL;
-#if CONFIG_LWM2M_OVERRIDE_HOSTNAME_ENABLE && 1
+
     const char *configured_host = CONFIG_LWM2M_OVERRIDE_HOSTNAME;
-#else
-    const char *configured_host = "192.168.3.100";
-#endif
-    if (configured_host && configured_host[0]) {
+    if (configured_host && configured_host[0] && 0) {
         if (resolve_hostname_ipv4(configured_host, resolved_ip, sizeof(resolved_ip))) {
             host = resolved_ip;
         } else {
-            host = configured_host;
+            char gw[32] = {0};
+            if (get_gateway_ipv4(gw, sizeof(gw))) {
+                ESP_LOGW(TAG, "DNS resolve failed for '%s', falling back to gateway %s", configured_host, gw);
+                host = gw;
+            } else {
+                ESP_LOGW(TAG, "DNS resolve failed for '%s', and no gateway available; using as-is", configured_host);
+                host = configured_host;
+            }
         }
     } else {
-        host = "127.0.0.1";
+        host = "192.168.3.100";
     }
     snprintf(out, out_size, "%s://%s:%d", is_secure ? "coaps" : "coap", host, port);
 }
@@ -203,9 +227,9 @@ static int setup_server(anjay_t *anjay) {
 
 static void lwm2m_client_task(void *arg) {
     avs_log_set_default_level(AVS_LOG_DEBUG);
-    const anjay_dm_object_def_t **dev_obj = NULL;
-    const anjay_dm_object_def_t **loc_obj = NULL;
-    const anjay_dm_object_def_t **sm_obj = NULL;
+    const anjay_dm_object_def_t *const *dev_obj = NULL;
+    const anjay_dm_object_def_t *const *loc_obj = NULL;
+    const anjay_dm_object_def_t *const *sm_obj = NULL;
     if (CONFIG_LWM2M_START_DELAY_MS > 0) {
         vTaskDelay(pdMS_TO_TICKS(CONFIG_LWM2M_START_DELAY_MS));
     }

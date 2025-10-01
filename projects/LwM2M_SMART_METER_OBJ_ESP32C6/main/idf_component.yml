@@ -5,5 +5,3 @@ dependencies:
     path: components/anjay-esp-idf
     version: develop
     require: public
-  espressif/led_strip: 
-    version: ">=3.0.0"

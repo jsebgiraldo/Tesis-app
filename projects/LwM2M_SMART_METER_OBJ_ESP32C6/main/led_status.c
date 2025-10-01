@@ -1,37 +1,7 @@
 #include "led_status.h"
 #include "sdkconfig.h"
 #include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
-#include "esp_log.h"
-
-#if CONFIG_BOARD_HAS_WS2812
-#include "led_strip.h"
-#endif
-
-static const char* TAG = "LED_STATUS";
-
-static led_mode_t s_mode = LED_MODE_OFF;
-
-#if CONFIG_BOARD_HAS_WS2812
-static led_strip_handle_t s_strip = NULL;
-#endif
-
-static TaskHandle_t s_anim_task = NULL;
-
-static inline void set_rgb(uint8_t r, uint8_t g, uint8_t b)
-{
-#if CONFIG_BOARD_HAS_WS2812
-    if (!s_strip) return;
-    const uint8_t limit = 96; // cap brightness to ~38% for better visibility
-    if (r > limit) r = limit;
-    if (g > limit) g = limit;
-    if (b > limit) b = limit;
-    led_strip_set_pixel(s_strip, 0, r, g, b);
-    led_strip_refresh(s_strip);
-#else
-    (void)r; (void)g; (void)b;
-#endif
-}
+// LED module removed intentionally
 
 void led_status_get_color(uint8_t* r, uint8_t* g, uint8_t* b)
 {

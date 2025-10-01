@@ -17,7 +17,6 @@
 #include <wifi_provisioning/scheme_ble.h>
 #include <wifi_provisioning/scheme_softap.h>
 #include "qrcode.h"
-#include "led_status.h"
 
 static const char *TAG = "wifi_prov";
 
@@ -94,7 +93,7 @@ static void event_handler(void* arg, esp_event_base_t event_base,
                 break;
             case WIFI_EVENT_STA_DISCONNECTED:
                 ESP_LOGI(TAG, "Disconnected. Connecting to the AP again...");
-                led_status_set_mode(LED_MODE_WIFI_FAIL);
+                // LED removed: indicate via logs only
                 esp_wifi_connect();
                 break;
 #ifdef CONFIG_PROV_TRANSPORT_SOFTAP
@@ -113,7 +112,7 @@ static void event_handler(void* arg, esp_event_base_t event_base,
         ESP_LOGI(TAG, "Connected with IP Address:" IPSTR, IP2STR(&event->ip_info.ip));
         /* Signal main application to continue execution */
         xEventGroupSetBits(wifi_event_group, WIFI_CONNECTED_EVENT);
-        led_status_set_mode(LED_MODE_WIFI_CONNECTED);
+    // LED removed: indicate via logs only
     }
 }
 
@@ -363,7 +362,6 @@ void wifi_prov_mgr_start_provisioning_service(void)
             service_name, service_key));
 #ifdef CONFIG_PROV_TRANSPORT_BLE
     log_ble_events();
-    led_status_set_mode(LED_MODE_PROV_BLE);
     wifi_prov_print_qr(service_name, username, pop, PROV_TRANSPORT_BLE);
 #else /* CONFIG_PROV_TRANSPORT_SOFTAP */
     wifi_prov_print_qr(service_name, username, pop, PROV_TRANSPORT_SOFTAP);

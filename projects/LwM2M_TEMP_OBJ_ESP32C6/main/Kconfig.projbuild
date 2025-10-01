@@ -239,3 +239,32 @@ config LWM2M_MSG_CACHE_SIZE
     range 0 8192
 
 endmenu
+
+menu "GeoIP (Approximate Location)"
+
+config GEOLOC_ENABLE
+    bool "Enable GeoIP-based location"
+    default y
+    help
+        If enabled, the Location (Object 6) will be periodically updated by
+        querying a public IP geolocation service and mapping the result to
+        Latitude/Longitude and Timestamp resources.
+
+config GEOLOC_USE_SERVER_HOST
+    bool "Use default service base URL"
+    default y
+    help
+        If enabled, use the base URL configured below. If disabled, the code can
+        be modified to use a custom resolver.
+
+config GEOLOC_BASE_URL
+    string "GeoIP service base URL"
+    depends on GEOLOC_USE_SERVER_HOST
+    default "http://ip-api.com/json"
+    help
+        Base URL to query public IP geolocation. Example providers:
+          - http://ip-api.com/json
+          - https://ipinfo.io/json
+        Note: These services have rate limits; use responsibly.
+
+endmenu

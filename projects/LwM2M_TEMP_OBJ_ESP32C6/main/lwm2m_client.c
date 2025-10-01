@@ -501,10 +501,6 @@ static void lwm2m_client_task(void *arg) {
         ESP_LOGE(TAG, "Could not register Humidity (3304) object");
         goto cleanup;
     }
-    if (anjay_register_object(anjay, onoff_object_def())) {
-        ESP_LOGE(TAG, "Could not register 3312 object");
-        goto cleanup;
-    }
     if (anjay_register_object(anjay, connectivity_object_def())) {
         ESP_LOGE(TAG, "Could not register Connectivity (4) object");
         goto cleanup;

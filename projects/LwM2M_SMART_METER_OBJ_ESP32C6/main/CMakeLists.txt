@@ -1,7 +1,7 @@
 idf_component_register(
-    SRCS "wifi_provisioning_new.c" "led_status.c" "main.c" "wifi_provisioning.c" "lwm2m_client.c" "qrcode.c" "device_object.c" "location_object.c" "firmware_update.c" "wifi.c" "smart_meter_object.c"
+    SRCS "led_status.c" "wifi_provisioning_new.c" "main.c" "wifi_provisioning.c" "lwm2m_client.c" "qrcode.c" "device_object.c" "location_object.c" "firmware_update.c" "smart_meter_object.c"
     INCLUDE_DIRS "." "${IDF_PATH}/components/app_update/include"
-    REQUIRES freertos esp_netif esp_wifi nvs_flash lwip anjay-esp-idf wifi_provisioning protocomm bt led_strip driver app_update esp_partition esp_https_ota esp_app_format
+    REQUIRES freertos esp_netif esp_wifi nvs_flash lwip anjay-esp-idf wifi_provisioning protocomm bt driver app_update esp_partition esp_https_ota esp_app_format esp_http_client json
     PRIV_REQUIRES app_update
 )
 
