@@ -21,6 +21,13 @@ docker run --rm -it \
 - Arranque: `cd docker/thingsboard && ./up.sh` y abre `http://localhost:8080`.
 - Logs: `./logs.sh`. Detener: `./down.sh`.
 
+## Portainer (UI de gestión Docker)
+- Administra visualmente contenedores, volúmenes e imágenes locales.
+- Arranque: `cd docker/portainer && ./up.sh` y abre `http://localhost:9000` (primera vez crea usuario admin).
+- Alternativa PowerShell Windows: `./up.ps1`.
+- Detener: `./down.sh` / `./down.ps1`.
+- HTTPS auto: `https://localhost:9443` (cert self-signed). Para producción agrega proxy/cert válido.
+
 ## Notas
 - Para Thread se compila con componentes OpenThread de ESP-IDF (ESP32-H2/H4). Requiere hardware compatible.
 

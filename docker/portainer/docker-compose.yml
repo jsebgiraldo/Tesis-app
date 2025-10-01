@@ -1,0 +1,18 @@
+services:
+  portainer:
+    image: portainer/portainer-ce:latest
+    restart: always
+    ports:
+      - "9000:9000"   # UI HTTP
+      - "9443:9443"   # UI HTTPS (self-signed cert auto-gen first run)
+    volumes:
+      - portainer-data:/data
+      - /var/run/docker.sock:/var/run/docker.sock
+    security_opt:
+      - no-new-privileges:true
+    # Si deseas usar agente remoto: habilita edge/agent docs.
+
+volumes:
+  portainer-data:
+    name: portainer-data
+    driver: local

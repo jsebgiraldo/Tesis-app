@@ -267,4 +267,43 @@ config GEOLOC_BASE_URL
           - https://ipinfo.io/json
         Note: These services have rate limits; use responsibly.
 
+config GEOLOC_REFRESH_MINUTES
+    int "GeoIP refresh period (minutes)"
+    depends on GEOLOC_ENABLE
+    range 1 720
+    default 60
+    help
+        Interval between GeoIP queries. Choose a higher value to respect
+        public service rate limits.
+
+config GEOLOC_HTTP_TIMEOUT_MS
+    int "GeoIP HTTP timeout (ms)"
+    depends on GEOLOC_ENABLE
+    range 500 10000
+    default 2500
+    help
+        Timeout for the HTTP client when querying the geolocation service.
+
+config GEOLOC_PERSIST_NVS
+    bool "Persist last location in NVS"
+    depends on GEOLOC_ENABLE
+    default y
+    help
+        Store last successful latitude/longitude in NVS and restore on boot
+        before first network-based update.
+
+config GEOLOC_FALLBACK_LAT
+    string "Fallback latitude (string)"
+    depends on GEOLOC_ENABLE
+    default "5.000000"
+    help
+        Latitude used as initial value if no persisted location exists.
+
+config GEOLOC_FALLBACK_LON
+    string "Fallback longitude (string)"
+    depends on GEOLOC_ENABLE
+    default "-74.000000"
+    help
+        Longitude used as initial value if no persisted location exists.
+
 endmenu

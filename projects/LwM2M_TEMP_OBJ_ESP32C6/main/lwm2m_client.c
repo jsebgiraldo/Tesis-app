@@ -423,14 +423,14 @@ static void lwm2m_net_event_handler(void *arg, esp_event_base_t event_base, int3
         (void) anjay_transport_enter_offline(anjay, ANJAY_TRANSPORT_SET_ALL);
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ESP_LOGI(TAG, "Got IP -> exiting LwM2M offline and scheduling reconnect");
-        // If no DNS provided via DHCP, set gateway as DNS, then dump list
         ensure_dns_gateway();
         log_dns_servers();
         (void) anjay_transport_exit_offline(anjay, ANJAY_TRANSPORT_SET_ALL);
         (void) anjay_transport_schedule_reconnect(anjay, ANJAY_TRANSPORT_SET_ALL);
-        // Hint: mark sensor objects changed so the server may re-read promptly after reconnect
         (void) anjay_notify_instances_changed(anjay, 3303); // Temperature
         (void) anjay_notify_instances_changed(anjay, 3304); // Humidity
+        // Immediate connectivity update so IP/GW are ready before any server Read
+        connectivity_object_update(anjay);
     }
 }
 
@@ -585,6 +585,7 @@ static void lwm2m_client_task(void *arg) {
     // Initial hint right after starting: mark sensor objects as changed so server may read/observe
     (void) anjay_notify_instances_changed(anjay, 3303);
     (void) anjay_notify_instances_changed(anjay, 3304);
+    (void) anjay_notify_instances_changed(anjay, 4); // Connectivity Monitoring
 
     // Install Firmware Update object
     if (fw_update_install(anjay)) {
