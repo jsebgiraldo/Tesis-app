@@ -12,6 +12,8 @@
 #include <freertos/task.h>
 #include <anjay/attr_storage.h>
 #include "sdkconfig.h"
+#include "power_model.h"
+#include "energy_accumulator.h"
 
 #define OID_SMART_METER 10243
 // Resource IDs per provided table
@@ -84,6 +86,10 @@ typedef struct {
     float ln_active_energy_kwh;
     float ln_reactive_energy_kvarh;
     float ln_apparent_energy_kvah;
+    // new: model tick for continuous instantaneous evolution
+    TickType_t last_model_tick;
+    // energy accumulator (import/export separation)
+    EnergyAccumulator energy_acc;
 } sm_ctx_t;
 
 static const char *TAG_SM = "sm_obj";
@@ -91,9 +97,9 @@ static const char *TAG_SM = "sm_obj";
 static sm_ctx_t g_sm;
 
 // Delta thresholds for notifications
-#define SM_DELTA_VOLTAGE      0.15f
-#define SM_DELTA_CURRENT      0.02f
-#define SM_DELTA_POWER        0.01f
+#define SM_DELTA_VOLTAGE      0.10f
+#define SM_DELTA_CURRENT      0.01f
+#define SM_DELTA_POWER        0.002f
 #define SM_DELTA_PF           0.005f
 #define SM_DELTA_THD          0.005f
 #define SM_DELTA_FREQ         0.01f
@@ -202,34 +208,106 @@ static int resource_read(anjay_t *anjay, const anjay_dm_object_def_t *const *def
         return anjay_ret_string(ctx, obj->description);
 
     // Measurements
-    case RID_TENSION:
-        return anjay_ret_float(ctx, obj->voltage_v);
-    case RID_CURRENT:
-        return anjay_ret_float(ctx, obj->current_a);
+    case RID_TENSION: {
+        // Per-read jitter: ±0.25 V around current stored voltage, clamp to realistic limits
+        float jitter = frand_range(-0.25f, 0.25f);
+        float v_out = clampf(obj->voltage_v + jitter, 205.0f, 255.0f);
+        return anjay_ret_float(ctx, v_out);
+    }
+    case RID_CURRENT: {
+        // Per-read jitter: ±0.04 A scaled by load fraction, ensures visible change but realistic
+        float load_frac = clampf(obj->current_a / 6.0f, 0.0f, 1.2f);
+        float mag = 0.04f * (0.3f + 0.7f * load_frac); // 0.012A min up to 0.04A near high load
+        float jitter = frand_range(-mag, mag);
+        float i_out = clampf(obj->current_a + jitter, 0.01f, 6.5f);
+        return anjay_ret_float(ctx, i_out);
+    }
     case RID_ACTIVE_POWER:
-        return anjay_ret_float(ctx, obj->active_power_kw);
+        {
+            // Active power jitter: ±0.02 kW or 1.5% of value (may reveal slight swings)
+            float base = obj->active_power_kw;
+            float mag = fmaxf(0.02f, base * 0.015f);
+            float val = clampf(base + frand_range(-mag, mag), 0.0f, 6.0f);
+            return anjay_ret_float(ctx, val);
+        }
     case RID_REACTIVE_POWER:
-        return anjay_ret_float(ctx, obj->reactive_power_kvar);
+        {
+            float base = obj->reactive_power_kvar;
+            float mag = fmaxf(0.015f, fabsf(base) * 0.02f);
+            // reactive can be slightly negative (capacitive); keep within +/-3 kvar realistic single-phase small system
+            float val = clampf(base + frand_range(-mag, mag), -3.0f, 3.0f);
+            return anjay_ret_float(ctx, val);
+        }
     case RID_INDUCTIVE_REACTIVE_POWER:
-        return anjay_ret_float(ctx, obj->inductive_reactive_power_kvar);
+        {
+            float base = obj->inductive_reactive_power_kvar;
+            float mag = fmaxf(0.010f, base * 0.02f);
+            float val = clampf(base + frand_range(-mag, mag), 0.0f, 3.0f);
+            return anjay_ret_float(ctx, val);
+        }
     case RID_CAPACITIVE_REACTIVE_POWER:
-        return anjay_ret_float(ctx, obj->capacitive_reactive_power_kvar);
+        {
+            float base = obj->capacitive_reactive_power_kvar;
+            float mag = fmaxf(0.010f, base * 0.03f);
+            float val = clampf(base + frand_range(-mag, mag), 0.0f, 3.0f);
+            return anjay_ret_float(ctx, val);
+        }
     case RID_APPARENT_POWER:
-        return anjay_ret_float(ctx, obj->apparent_power_kva);
+        {
+            float base = obj->apparent_power_kva;
+            float mag = fmaxf(0.020f, base * 0.012f);
+            float val = clampf(base + frand_range(-mag, mag), 0.0f, 6.5f);
+            return anjay_ret_float(ctx, val);
+        }
     case RID_POWER_FACTOR:
-        return anjay_ret_float(ctx, obj->power_factor);
+        {
+            float base = obj->power_factor;
+            float mag = 0.0035f + (1.0f - base) * 0.004f; // un poco más jitter si PF no es cercano a 1
+            float val = clampf(base + frand_range(-mag, mag), 0.40f, 0.999f);
+            return anjay_ret_float(ctx, val);
+        }
     case RID_THD_V:
         return anjay_ret_float(ctx, obj->thd_v);
     case RID_THD_A:
         return anjay_ret_float(ctx, obj->thd_a);
     case RID_ACTIVE_ENERGY:
-        return anjay_ret_float(ctx, obj->active_energy_kwh);
+        {
+            // Monotonic micro-increment: simulate meter register resolution (~0.001 kWh)
+            static double last_e_kwh = -1.0;
+            double base = obj->active_energy_kwh;
+            if (last_e_kwh < 0.0) { last_e_kwh = base; }
+            // If base advanced, sync; else add a tiny synthetic increment 0.0002..0.0006
+            if (base > last_e_kwh) {
+                last_e_kwh = base;
+            } else {
+                last_e_kwh += frand_range(0.0002f, 0.0006f);
+            }
+            return anjay_ret_float(ctx, (float) last_e_kwh);
+        }
     case RID_REACTIVE_ENERGY:
-        return anjay_ret_float(ctx, obj->reactive_energy_kvarh);
+        {
+            static double last_e_kvarh = -1.0;
+            double base = obj->reactive_energy_kvarh;
+            if (last_e_kvarh < 0.0) { last_e_kvarh = base; }
+            if (base > last_e_kvarh) { last_e_kvarh = base; }
+            else { last_e_kvarh += frand_range(0.0001f, 0.0003f); }
+            return anjay_ret_float(ctx, (float) last_e_kvarh);
+        }
     case RID_APPARENT_ENERGY:
-        return anjay_ret_float(ctx, obj->apparent_energy_kvah);
+        {
+            static double last_e_kvah = -1.0;
+            double base = obj->apparent_energy_kvah;
+            if (last_e_kvah < 0.0) { last_e_kvah = base; }
+            if (base > last_e_kvah) { last_e_kvah = base; }
+            else { last_e_kvah += frand_range(0.00025f, 0.0007f); }
+            return anjay_ret_float(ctx, (float) last_e_kvah);
+        }
     case RID_FREQUENCY:
-        return anjay_ret_float(ctx, obj->frequency_hz);
+        {
+            float base = obj->frequency_hz;
+            float val = clampf(base + frand_range(-0.005f, 0.005f), 59.95f, 60.05f);
+            return anjay_ret_float(ctx, val);
+        }
     case RID_SIM_MODE:
         return anjay_ret_i32(ctx, obj->dynamic_mode ? 1 : 0);
     case RID_UPDATE_PERIOD:
@@ -316,10 +394,12 @@ const anjay_dm_object_def_t *const *smart_meter_object_create(void) {
     g_sm.inductive_reactive_power_kvar = q_kvar; // assume inductive load
     g_sm.capacitive_reactive_power_kvar = 0.0f;
 
-    // Energies start at 0
+    // Energies start at 0 (will load from persistence for active import/export)
     g_sm.active_energy_kwh = 0.0f;
     g_sm.reactive_energy_kvarh = 0.0f;
     g_sm.apparent_energy_kvah = 0.0f;
+    energy_acc_init(&g_sm.energy_acc);
+    g_sm.active_energy_kwh = (float) g_sm.energy_acc.kwh_import; // map import to active_energy
 
     // THD (fractions)
     g_sm.thd_v = 0.02f; // 2%
@@ -327,11 +407,13 @@ const anjay_dm_object_def_t *const *smart_meter_object_create(void) {
 
     g_sm.last_update = xTaskGetTickCount();
     g_sm.last_dyn_notify = g_sm.last_update;
+    g_sm.last_model_tick = g_sm.last_update;
     g_sm.attrs_initialized = false;
     g_sm.first_notify_done = false;
-    // runtime init: default to periodic mode; update period 60s (attributes may adjust cadence)
-    g_sm.dynamic_mode = false;
-    g_sm.update_period_sec = 60;
+    // runtime init: enable dynamic mode by default for visible variation; shorter update period
+    g_sm.dynamic_mode = true;
+    g_sm.update_period_sec = 10;
+    ESP_LOGI(TAG_SM, "Smart Meter dynamic_mode=ON, update_period=%us", (unsigned) g_sm.update_period_sec);
     ESP_LOGI(TAG_SM, "Smart Meter(10243) created");
     return &g_sm.def;
 }
@@ -360,62 +442,125 @@ void smart_meter_object_update(anjay_t *anjay, const anjay_dm_object_def_t *cons
         do_fast_dyn = true;
         g_sm.last_dyn_notify = now;
     }
-    if (!do_periodic && !do_fast_dyn) {
-        return;
-    }
-    float dt_hours = 0.0f;
+    // Always evolve instantaneous state (even if no notify) so reads change over time.
+    TickType_t dt_model_ticks = now - g_sm.last_model_tick;
+    g_sm.last_model_tick = now;
     if (do_periodic) {
         g_sm.last_update = now;
-        dt_hours = (float) dt_ticks / (float) configTICK_RATE_HZ / 3600.0f;
+    }
+    float dt_hours = do_periodic ? ((float) dt_ticks / (float) configTICK_RATE_HZ / 3600.0f) : 0.0f;
+    float dt_model_seconds = (float) dt_model_ticks / (float) configTICK_RATE_HZ;
+    // For visibility: if in dynamic fast notify path and scheduler interval < ~1s, upscale evolution to 1s equivalent
+    float evolve_seconds = dt_model_seconds;
+    if (g_sm.dynamic_mode && do_fast_dyn && evolve_seconds < 0.9f) {
+        evolve_seconds = 1.0f; // amplify evolution so differences exceed deltas
     }
 
-    // Random walk / drift-based simulation (fuente única de verdad para lecturas y notificaciones)
-    static float rw_voltage = 230.0f;
-    static float rw_current = 0.8f;
-    static float rw_pf = 0.93f;
-    static float rw_freq = 60.0f;
-    // Pequeños pasos
-    rw_voltage += frand_range(-0.6f, 0.6f); // suaves variaciones
-    rw_current += frand_range(-0.15f, 0.15f);
-    rw_pf += frand_range(-0.01f, 0.01f);
-    rw_freq += frand_range(-0.01f, 0.01f);
-    // Eventos ocasionales (picos de carga o caída) cada ~30 muestras aprox
-    if ((esp_random() % 30u) == 0u) {
-        rw_current += frand_range(0.5f, 1.2f); // pico carga
-    }
-    if ((esp_random() % 50u) == 0u) {
-        rw_voltage += frand_range(-3.0f, -1.0f); // pequeña caída
-    }
-    // Clamp límites físicos
-    rw_voltage = clampf(rw_voltage, 205.0f, 255.0f);
-    rw_current = clampf(rw_current, 0.05f, 6.0f);
-    rw_pf = clampf(rw_pf, 0.50f, 0.995f);
-    rw_freq = clampf(rw_freq, 59.6f, 60.4f);
-    float new_voltage = rw_voltage;
-    float new_current = rw_current;
-    float new_pf = rw_pf;
-    float new_freq = rw_freq;
+    // --- NUEVO MODELO REALISTA DE MEDIDOR MONOFÁSICO ---
+    // Objetivos:
+    //  - Perfil diario (base load) con pico nocturno/vespertino
+    //  - Eventos de carga (electrodomésticos) de duración finita
+    //  - Sag de tensión dependiente de corriente
+    //  - Factor de potencia dependiente de nivel de carga
+    //  - THD correlacionado inversamente con PF / sobrecargas
+    //  - Frecuencia casi estable con jitter mínimo
 
-    // Apparent power (kVA), Active (kW), Reactive (kvar)
-    const float s_kva = (new_voltage * new_current) / 1000.0f;
-    const float p_kw = s_kva * new_pf;
-    const float q_kvar_mag = s_kva * sqrtf(fmaxf(0.0f, 1.0f - new_pf * new_pf));
-    bool inductive = (esp_random() & 1u) != 0u; // random inductive/capacitive
+    // Estado persistente para eventos y reloj simulado
+    typedef struct {
+        float extra_current;      // A adicionales por evento
+        float remaining_seconds;  // duración restante
+    } load_event_t;
+    static load_event_t s_event = { 0.0f, 0.0f };
+    static bool s_init = false;
+    static float sim_seconds = 0.0f; // reloj interno acumulado
+    if (!s_init) { s_init = true; sim_seconds = 0.0f; }
+    sim_seconds += evolve_seconds; // avanza siempre para coherencia (amplified if needed)
+
+    // Usar nuevo modelo de potencia activa (kW) con random-walk y picos
+    float modeled_active_kw = active_power_kw(sim_seconds);
+
+    // Segundo del día (0..86400)
+    const float day_seconds = fmodf(sim_seconds, 86400.0f);
+
+    // Perfil diario (normalizado 0..1): baja madrugada, sube mañana, pico tarde-noche
+    // Usamos suma de dos gaussians + offset mínimo
+    float t = day_seconds / 86400.0f; // 0..1
+    // Dos picos centrados ~07:30 (0.3125) y 20:00 (0.8333)
+    float peak_morning = expf(-160.0f * (t - 0.3125f) * (t - 0.3125f));
+    float peak_evening = expf(-90.0f * (t - 0.8333f) * (t - 0.8333f));
+    float base_curve = 0.25f + 0.55f * (peak_morning + 1.3f * peak_evening);
+    base_curve = clampf(base_curve, 0.20f, 1.10f);
+
+    // Corriente base nominal (por ejemplo 5 A pico típico residencial monofásico)
+    const float rated_current = 5.0f; // A
+    float base_current = rated_current * base_curve;
+
+    // Ruido aleatorio suave (±6%)
+    base_current *= (1.0f + frand_range(-0.06f, 0.06f));
+
+    // Gestionar evento de carga (lavadora, microondas, etc.)
+    if (s_event.remaining_seconds > 0.0f) {
+    s_event.remaining_seconds -= evolve_seconds;
+        if (s_event.remaining_seconds <= 0.0f) { s_event.extra_current = 0.0f; }
+    } else {
+        // Probabilidad de iniciar evento en actualización periódica (~1 cada 5-10 min)
+        if (do_periodic && (esp_random() % 40u) == 0u) {
+            s_event.extra_current = frand_range(0.8f, 2.5f); // A
+            s_event.remaining_seconds = frand_range(60.0f, 600.0f); // 1 a 10 minutos
+        }
+    }
+
+    float total_current = base_current + s_event.extra_current;
+    total_current = clampf(total_current, 0.05f, 6.0f); // límites físicos asumidos
+
+    // Factor de potencia modelado: empeora a cargas muy bajas (no lineales) y mejora medio-alto
+    // pf = pf_max - k * exp(-I / I0)
+    const float pf_max = 0.985f;
+    const float k_pf = 0.25f;
+    const float I0 = 0.9f;
+    float model_pf = pf_max - k_pf * expf(-total_current / I0);
+    // Ruido leve PF ±0.01
+    model_pf += frand_range(-0.01f, 0.01f);
+    model_pf = clampf(model_pf, 0.55f, 0.995f);
+
+    // Frecuencia casi estable
+    float new_freq = 60.0f + frand_range(-0.02f, 0.02f);
+
+    // Tensión base 230 ±2 V, caída hasta 8 V en máxima carga proporcional a (I / 6A)
+    float voltage_base = 230.0f + frand_range(-2.0f, 2.0f);
+    float sag = 8.0f * (total_current / 6.0f); // hasta 8V de caída en 6A
+    float new_voltage = voltage_base - sag + frand_range(-0.4f, 0.4f);
+    new_voltage = clampf(new_voltage, 205.0f, 255.0f);
+
+    // Potencias
+    const float s_kva = (new_voltage * total_current) / 1000.0f; // V*A -> kVA
+    // sustituir p_kw base por modelo activo, pero consistente con límites físicos del circuito
+    const float p_kw = fminf(modeled_active_kw, s_kva); // no exceder aparente
+    // Reactiva: componente imaginaria
+    const float q_kvar_mag = s_kva * sqrtf(fmaxf(0.0f, 1.0f - model_pf * model_pf));
+    // Decidir inductivo/capacitivo: inductivo la mayoría del tiempo, ocasional capacitivo pequeño
+    bool inductive = true;
+    if ((esp_random() % 200u) == 0u) { inductive = false; } // ~0.5% de lecturas capactivas
     float new_q_kvar = q_kvar_mag * (inductive ? 1.0f : -1.0f);
     float new_q_ind_kvar = inductive ? q_kvar_mag : 0.0f;
     float new_q_cap_kvar = inductive ? 0.0f : q_kvar_mag;
 
-    // Integrate energies (kWh, kvarh, kVAh)
-    float new_e_kwh = g_sm.active_energy_kwh + fmaxf(0.0f, p_kw) * dt_hours; // energy cannot decrease
+    // THD dependiente de PF y sobrecarga relativa
+    float load_frac = total_current / rated_current; // >1 posible con eventos
+    float new_thd_v = clampf(0.012f + 0.030f * (1.0f - model_pf) + 0.010f * fmaxf(0.0f, load_frac - 1.0f) + frand_range(-0.003f, 0.003f), 0.005f, 0.08f);
+    float new_thd_a = clampf(0.018f + 0.050f * (1.0f - model_pf) + 0.015f * fmaxf(0.0f, load_frac - 1.0f) + frand_range(-0.005f, 0.005f), 0.010f, 0.15f);
+
+    float new_current = total_current;
+    float new_pf = model_pf;
+
+    // Aparente/activa/reactiva ya calculadas (s_kva, p_kw, q_kvar)
+    // Integración de energía (solo en actualización periódica)
+    float new_e_kwh = g_sm.active_energy_kwh + fmaxf(0.0f, p_kw) * dt_hours;
     float new_e_kvarh = g_sm.reactive_energy_kvarh + fabsf(new_q_kvar) * dt_hours;
     float new_e_kvah = g_sm.apparent_energy_kvah + fmaxf(0.0f, s_kva) * dt_hours;
 
-    // THD variations (fractions)
-    float new_thd_v = clampf(frand_range(0.010f, 0.040f), 0.0f, 1.0f);
-    float new_thd_a = clampf(frand_range(0.015f, 0.060f), 0.0f, 1.0f);
-
-    bool update_instantaneous = do_periodic || (g_sm.dynamic_mode && do_fast_dyn);
-    if (update_instantaneous) {
+    // Always update instantaneous snapshot so reads see gradual drift
+    {
         g_sm.voltage_v = new_voltage;
         g_sm.frequency_hz = new_freq;
         g_sm.power_factor = new_pf;
@@ -430,35 +575,67 @@ void smart_meter_object_update(anjay_t *anjay, const anjay_dm_object_def_t *cons
     }
     if (do_periodic) {
         // Integrate energies sólo en el periodo principal
-        g_sm.active_energy_kwh = new_e_kwh;
+    g_sm.active_energy_kwh = new_e_kwh;
         g_sm.reactive_energy_kvarh = new_e_kvarh;
         g_sm.apparent_energy_kvah = new_e_kvah;
         ESP_LOGD(TAG_SM, "periodic update integrated dt_h=%.6f V=%.1f I=%.2f P=%.3f PF=%.3f E=%.4f", (double) dt_hours, (double) g_sm.voltage_v, (double) g_sm.current_a, (double) g_sm.active_power_kw, (double) g_sm.power_factor, (double) g_sm.active_energy_kwh);
+    // Persist import/export energies via accumulator (apparent sign logic: assume no export for now)
+    energy_acc_add(&g_sm.energy_acc, p_kw, dt_ticks / (double) configTICK_RATE_HZ, sim_seconds);
+    // Keep active_energy_kwh in sync with persisted value
+    g_sm.active_energy_kwh = (float) g_sm.energy_acc.kwh_import;
     } else if (g_sm.dynamic_mode && do_fast_dyn) {
+        // Inject minimal visible jitter if change would be too small for server display rounding
+        static bool s_toggle = false; s_toggle = !s_toggle; float sign = s_toggle ? 1.f : -1.f;
+        if (fabsf(g_sm.active_power_kw - g_sm.ln_active_power_kw) < 0.002f) {
+            g_sm.active_power_kw += sign * 0.012f; // ensure >=0.012 kW delta
+        }
+        if (fabsf(g_sm.current_a - g_sm.ln_current_a) < 0.003f) {
+            g_sm.current_a += sign * 0.02f;
+            if (g_sm.current_a < 0.01f) g_sm.current_a = 0.01f;
+        }
+        if (fabsf(g_sm.voltage_v - g_sm.ln_voltage_v) < 0.05f) {
+            g_sm.voltage_v += sign * 0.12f;
+        }
         ESP_LOGD(TAG_SM, "dyn update V=%.1f I=%.2f P=%.3f PF=%.3f", (double) g_sm.voltage_v, (double) g_sm.current_a, (double) g_sm.active_power_kw, (double) g_sm.power_factor);
     }
 
     if (do_periodic || (g_sm.dynamic_mode && do_fast_dyn)) {
         bool first = !g_sm.first_notify_done;
+        if (g_sm.dynamic_mode && do_fast_dyn && !do_periodic) {
+            // Unconditional notify instantaneous metrics to guarantee visible change each second
+            anjay_notify_changed(anjay, OID_SMART_METER, 0, RID_TENSION);        g_sm.ln_voltage_v = g_sm.voltage_v;
+            anjay_notify_changed(anjay, OID_SMART_METER, 0, RID_CURRENT);        g_sm.ln_current_a = g_sm.current_a;
+            anjay_notify_changed(anjay, OID_SMART_METER, 0, RID_ACTIVE_POWER);   g_sm.ln_active_power_kw = g_sm.active_power_kw;
+            anjay_notify_changed(anjay, OID_SMART_METER, 0, RID_REACTIVE_POWER); g_sm.ln_reactive_power_kvar = g_sm.reactive_power_kvar;
+            anjay_notify_changed(anjay, OID_SMART_METER, 0, RID_INDUCTIVE_REACTIVE_POWER); g_sm.ln_inductive_reactive_power_kvar = g_sm.inductive_reactive_power_kvar;
+            anjay_notify_changed(anjay, OID_SMART_METER, 0, RID_CAPACITIVE_REACTIVE_POWER); g_sm.ln_capacitive_reactive_power_kvar = g_sm.capacitive_reactive_power_kvar;
+            anjay_notify_changed(anjay, OID_SMART_METER, 0, RID_APPARENT_POWER); g_sm.ln_apparent_power_kva = g_sm.apparent_power_kva;
+            anjay_notify_changed(anjay, OID_SMART_METER, 0, RID_POWER_FACTOR);   g_sm.ln_power_factor = g_sm.power_factor;
+            anjay_notify_changed(anjay, OID_SMART_METER, 0, RID_THD_V);          g_sm.ln_thd_v = g_sm.thd_v;
+            anjay_notify_changed(anjay, OID_SMART_METER, 0, RID_THD_A);          g_sm.ln_thd_a = g_sm.thd_a;
+            anjay_notify_changed(anjay, OID_SMART_METER, 0, RID_FREQUENCY);      g_sm.ln_frequency_hz = g_sm.frequency_hz;
+            if (first) { g_sm.first_notify_done = true; }
+        } else {
 #define SM_MAYBE_NOTIFY(RID_, CURR, LAST, DELTA) \
     do { float _c = (CURR); if (first || fabsf(_c - (LAST)) >= (DELTA)) { (LAST) = _c; anjay_notify_changed(anjay, OID_SMART_METER, 0, (RID_)); } } while(0)
-        SM_MAYBE_NOTIFY(RID_TENSION, g_sm.voltage_v, g_sm.ln_voltage_v, SM_DELTA_VOLTAGE);
-        SM_MAYBE_NOTIFY(RID_CURRENT, g_sm.current_a, g_sm.ln_current_a, SM_DELTA_CURRENT);
-        SM_MAYBE_NOTIFY(RID_ACTIVE_POWER, g_sm.active_power_kw, g_sm.ln_active_power_kw, SM_DELTA_POWER);
-        SM_MAYBE_NOTIFY(RID_REACTIVE_POWER, g_sm.reactive_power_kvar, g_sm.ln_reactive_power_kvar, SM_DELTA_POWER);
-        SM_MAYBE_NOTIFY(RID_INDUCTIVE_REACTIVE_POWER, g_sm.inductive_reactive_power_kvar, g_sm.ln_inductive_reactive_power_kvar, SM_DELTA_POWER);
-        SM_MAYBE_NOTIFY(RID_CAPACITIVE_REACTIVE_POWER, g_sm.capacitive_reactive_power_kvar, g_sm.ln_capacitive_reactive_power_kvar, SM_DELTA_POWER);
-        SM_MAYBE_NOTIFY(RID_APPARENT_POWER, g_sm.apparent_power_kva, g_sm.ln_apparent_power_kva, SM_DELTA_POWER);
-        SM_MAYBE_NOTIFY(RID_POWER_FACTOR, g_sm.power_factor, g_sm.ln_power_factor, SM_DELTA_PF);
-        SM_MAYBE_NOTIFY(RID_THD_V, g_sm.thd_v, g_sm.ln_thd_v, SM_DELTA_THD);
-        SM_MAYBE_NOTIFY(RID_THD_A, g_sm.thd_a, g_sm.ln_thd_a, SM_DELTA_THD);
-        SM_MAYBE_NOTIFY(RID_FREQUENCY, g_sm.frequency_hz, g_sm.ln_frequency_hz, SM_DELTA_FREQ);
-        if (do_periodic) {
-            SM_MAYBE_NOTIFY(RID_ACTIVE_ENERGY, g_sm.active_energy_kwh, g_sm.ln_active_energy_kwh, SM_DELTA_ENERGY);
-            SM_MAYBE_NOTIFY(RID_REACTIVE_ENERGY, g_sm.reactive_energy_kvarh, g_sm.ln_reactive_energy_kvarh, SM_DELTA_ENERGY);
-            SM_MAYBE_NOTIFY(RID_APPARENT_ENERGY, g_sm.apparent_energy_kvah, g_sm.ln_apparent_energy_kvah, SM_DELTA_ENERGY);
-        }
-        if (first) { g_sm.first_notify_done = true; }
+            SM_MAYBE_NOTIFY(RID_TENSION, g_sm.voltage_v, g_sm.ln_voltage_v, SM_DELTA_VOLTAGE);
+            SM_MAYBE_NOTIFY(RID_CURRENT, g_sm.current_a, g_sm.ln_current_a, SM_DELTA_CURRENT);
+            SM_MAYBE_NOTIFY(RID_ACTIVE_POWER, g_sm.active_power_kw, g_sm.ln_active_power_kw, SM_DELTA_POWER);
+            SM_MAYBE_NOTIFY(RID_REACTIVE_POWER, g_sm.reactive_power_kvar, g_sm.ln_reactive_power_kvar, SM_DELTA_POWER);
+            SM_MAYBE_NOTIFY(RID_INDUCTIVE_REACTIVE_POWER, g_sm.inductive_reactive_power_kvar, g_sm.ln_inductive_reactive_power_kvar, SM_DELTA_POWER);
+            SM_MAYBE_NOTIFY(RID_CAPACITIVE_REACTIVE_POWER, g_sm.capacitive_reactive_power_kvar, g_sm.ln_capacitive_reactive_power_kvar, SM_DELTA_POWER);
+            SM_MAYBE_NOTIFY(RID_APPARENT_POWER, g_sm.apparent_power_kva, g_sm.ln_apparent_power_kva, SM_DELTA_POWER);
+            SM_MAYBE_NOTIFY(RID_POWER_FACTOR, g_sm.power_factor, g_sm.ln_power_factor, SM_DELTA_PF);
+            SM_MAYBE_NOTIFY(RID_THD_V, g_sm.thd_v, g_sm.ln_thd_v, SM_DELTA_THD);
+            SM_MAYBE_NOTIFY(RID_THD_A, g_sm.thd_a, g_sm.ln_thd_a, SM_DELTA_THD);
+            SM_MAYBE_NOTIFY(RID_FREQUENCY, g_sm.frequency_hz, g_sm.ln_frequency_hz, SM_DELTA_FREQ);
+            if (do_periodic) {
+                SM_MAYBE_NOTIFY(RID_ACTIVE_ENERGY, g_sm.active_energy_kwh, g_sm.ln_active_energy_kwh, SM_DELTA_ENERGY);
+                SM_MAYBE_NOTIFY(RID_REACTIVE_ENERGY, g_sm.reactive_energy_kvarh, g_sm.ln_reactive_energy_kvarh, SM_DELTA_ENERGY);
+                SM_MAYBE_NOTIFY(RID_APPARENT_ENERGY, g_sm.apparent_energy_kvah, g_sm.ln_apparent_energy_kvah, SM_DELTA_ENERGY);
+            }
+            if (first) { g_sm.first_notify_done = true; }
 #undef SM_MAYBE_NOTIFY
+        }
     }
 }

@@ -143,12 +143,12 @@ endchoice
 
 config LWM2M_SERVER_PORT
     int "LwM2M Server Port"
-    default 5685 if LWM2M_SERVER_SCHEME_COAP
+    default 5683 if LWM2M_SERVER_SCHEME_COAP
     default 5686 if LWM2M_SERVER_SCHEME_COAPS
     range 1 65535
     help
         UDP port of your LwM2M Server. Defaults follow ThingsBoard convention:
-          - 5685 for coap (NoSec)
+          - 5683 for coap (NoSec)
           - 5686 for coaps (DTLS/PSK)
 
 config LWM2M_OVERRIDE_HOSTNAME_ENABLE
