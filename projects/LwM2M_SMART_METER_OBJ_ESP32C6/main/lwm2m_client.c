@@ -64,7 +64,7 @@ static const char *TAG = "lwm2m_client";
 #define CONFIG_LWM2M_SECURITY_PSK_KEY ""
 #endif
 #ifndef CONFIG_LWM2M_SERVER_PORT
-#define CONFIG_LWM2M_SERVER_PORT 5683
+#define CONFIG_LWM2M_SERVER_PORT 5685
 #endif
 #ifndef CONFIG_LWM2M_OBS_FALLBACK_PERIOD_S
 #define CONFIG_LWM2M_OBS_FALLBACK_PERIOD_S 30
@@ -136,7 +136,7 @@ static void build_final_server_uri(char *out, size_t out_size) {
     int port = (int) CONFIG_LWM2M_SERVER_PORT;
     char resolved_ip[48] = {0};
     const char *configured_host = NULL;
-#if CONFIG_LWM2M_OVERRIDE_HOSTNAME_ENABLE && 0
+#if CONFIG_LWM2M_OVERRIDE_HOSTNAME_ENABLE
     configured_host = CONFIG_LWM2M_OVERRIDE_HOSTNAME;
 #else
     configured_host = "192.168.3.100"; // fallback demo
