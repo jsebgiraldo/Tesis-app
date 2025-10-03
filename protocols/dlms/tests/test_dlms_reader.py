@@ -10,6 +10,7 @@ from dlms_reader import (
     _extract_get_response_payload,
     _resolve_unit_label,
     obis_to_bytes,
+        _parse_args,
 )
 
 
@@ -63,6 +64,21 @@ class DlmsDataParsingTest(unittest.TestCase):
         display, reported = _resolve_unit_label(33, "A")
         self.assertEqual(display, "A")
         self.assertIsNone(reported)
+
+    class CliParsingTest(unittest.TestCase):
+        def test_measurement_defaults_to_single_voltage(self) -> None:
+            args = _parse_args(["--host", "127.0.0.1"])
+            self.assertEqual(args.measurements, ["voltage_l1"])
+
+        def test_measurement_accepts_multiple_values(self) -> None:
+            args = _parse_args([
+                "--host",
+                "127.0.0.1",
+                "--measurement",
+                "voltage_l1",
+                "current_l1",
+            ])
+            self.assertEqual(args.measurements, ["voltage_l1", "current_l1"])
 
     def test_obis_to_bytes(self) -> None:
         self.assertEqual(

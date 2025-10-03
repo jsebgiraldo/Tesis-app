@@ -725,9 +725,11 @@ def _parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     parser.add_argument("--port", type=int, default=4059, help="Meter TCP port (default: 4059)")
     parser.add_argument(
         "--measurement",
+        dest="measurements",
         choices=sorted(MEASUREMENTS.keys()),
-        default="voltage_l1",
-        help="Named measurement to request (default: voltage_l1)",
+        nargs="+",
+        default=["voltage_l1"],
+        help="One or more named measurements to request (default: voltage_l1)",
     )
     parser.add_argument(
         "--server-logical",
@@ -773,11 +775,6 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     if len(password_bytes) > 16:
         password_bytes = password_bytes[:16]
 
-    measurement = MEASUREMENTS[args.measurement]
-    obis = measurement["obis"]
-
-    preferred_unit = measurement.get("preferred_unit")
-
     client = DLMSClient(
         host=args.host,
         port=args.port,
@@ -792,24 +789,27 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
 
     try:
         client.connect()
-        value, unit_code, raw_value = client.read_register(obis)
+        for key in args.measurements:
+            measurement = MEASUREMENTS[key]
+            preferred_unit = measurement.get("preferred_unit")
+            obis = measurement["obis"]
+            value, unit_code, raw_value = client.read_register(obis)
+            display_unit, reported_unit = _resolve_unit_label(unit_code, preferred_unit)
+            if reported_unit is not None:
+                warning = (
+                    f"Warning: meter reported unit '{reported_unit}' (code {unit_code}); "
+                    f"overriding to '{display_unit}'"
+                )
+                print(warning, file=sys.stderr)
+            description = measurement["description"]
+            print(
+                f"{description} ({obis}): {value} {display_unit}"
+                f"  [raw={raw_value}, scaler unit code={unit_code}]"
+            )
     except Exception as exc:  # broad catch to ensure clean disconnect
         print(f"Error: {exc}", file=sys.stderr)
         client.close()
         return 1
-
-    display_unit, reported_unit = _resolve_unit_label(unit_code, preferred_unit)
-    if reported_unit is not None:
-        warning = (
-            f"Warning: meter reported unit '{reported_unit}' (code {unit_code}); "
-            f"overriding to '{display_unit}'"
-        )
-        print(warning, file=sys.stderr)
-    description = measurement["description"]
-    print(
-        f"{description} ({obis}): {value} {display_unit}"
-        f"  [raw={raw_value}, scaler unit code={unit_code}]"
-    )
 
     client.close()
     return 0
