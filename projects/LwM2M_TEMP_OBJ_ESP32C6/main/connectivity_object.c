@@ -186,6 +186,7 @@ static int resource_read(anjay_t *anjay, const anjay_dm_object_def_t *const *def
 
 static const anjay_dm_object_def_t OBJ_DEF = {
     .oid = OID_CONNECTIVITY,
+    .version = "1.3",
     .handlers = {
         .list_instances = list_instances,
         .list_resources = list_resources,

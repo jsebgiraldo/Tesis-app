@@ -54,6 +54,7 @@ static int resource_write(anjay_t *anjay, const anjay_dm_object_def_t *const *de
 
 static const anjay_dm_object_def_t OBJ_DEF = {
     .oid = OID_ONOFF,
+    .version = "1.1",
     .handlers = {
         .list_instances = list_instances,
         .list_resources = list_resources,

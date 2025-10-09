@@ -185,14 +185,92 @@ config LWM2M_OVERRIDE_HOSTNAME
         Hostname that will be resolved on startup and used as the server IP.
         Example: thingsboard.edge.play
 
-config LWM2M_BOOTSTRAP
-    bool "Use LwM2M Bootstrap"
-    default n
+menu "LwM2M Bootstrap Configuration"
 
-config LWM2M_BOOTSTRAP_URI
-    string "Bootstrap Server URI (coap(s)://host:port)"
-    depends on LWM2M_BOOTSTRAP
-    default "coap://192.168.3.100:5683"
+    config LWM2M_BOOTSTRAP
+        bool "Enable LwM2M Bootstrap (ThingsBoard Auto-Provisioning)"
+        default n
+        help
+            Enable LwM2M Bootstrap mode for automatic device provisioning.
+            When enabled, device connects to Bootstrap Server first to receive
+            credentials and server configuration. ThingsBoard will automatically
+            create the device and provision credentials.
+
+    choice LWM2M_BOOTSTRAP_MODE
+        prompt "Bootstrap Mode"
+        depends on LWM2M_BOOTSTRAP
+        default LWM2M_BOOTSTRAP_MODE_CLIENT_INITIATED
+        help
+            Select how the bootstrap process is initiated
+
+        config LWM2M_BOOTSTRAP_MODE_CLIENT_INITIATED
+            bool "Client-Initiated Bootstrap"
+            help
+                Device initiates bootstrap by sending Bootstrap-Request to server
+
+        config LWM2M_BOOTSTRAP_MODE_SERVER_INITIATED
+            bool "Server-Initiated Bootstrap"
+            help
+                Server initiates bootstrap (requires device to be pre-configured)
+
+    endchoice
+
+    config LWM2M_BOOTSTRAP_URI
+        string "Bootstrap Server URI"
+        depends on LWM2M_BOOTSTRAP
+        default "coap://10.42.0.1:5687"
+        help
+            URI of ThingsBoard Bootstrap Server.
+            Format: coap://host:port or coaps://host:port
+            Examples:
+              - coap://10.42.0.1:5687 (ThingsBoard Bootstrap Server - from your config)
+              - coap://192.168.1.100:5687 (ThingsBoard Edge local)
+            
+            From your ThingsBoard profile:
+              - Bootstrap Server Port: 5687 (shortServerId: 111)
+              - LwM2M Server Port: 5685 (shortServerId: 123)
+
+    config LWM2M_BOOTSTRAP_SECURITY_MODE
+        int "Bootstrap Security Mode"
+        depends on LWM2M_BOOTSTRAP
+        default 3
+        range 0 4
+        help
+            LwM2M Security Mode for Bootstrap connection:
+            0 = PSK (Pre-Shared Key)
+            3 = NoSec (No Security)
+            
+            ThingsBoard typically uses NoSec (3) for Bootstrap,
+            then provisions DTLS credentials for LwM2M Server connection.
+
+    config LWM2M_BOOTSTRAP_PSK_ID
+        string "Bootstrap PSK Identity"
+        depends on LWM2M_BOOTSTRAP
+        depends on LWM2M_BOOTSTRAP_SECURITY_MODE = 0
+        default ""
+        help
+            PSK Identity for Bootstrap Server (only if using PSK mode).
+            Leave empty to use endpoint name as identity.
+
+    config LWM2M_BOOTSTRAP_PSK_KEY
+        string "Bootstrap PSK Key (hex)"
+        depends on LWM2M_BOOTSTRAP
+        depends on LWM2M_BOOTSTRAP_SECURITY_MODE = 0
+        default ""
+        help
+            PSK Key in hexadecimal for Bootstrap Server.
+            Example: 0123456789ABCDEF
+
+    config LWM2M_BOOTSTRAP_SERVER_ACCOUNT_TIMEOUT
+        int "Bootstrap Server Account Timeout (seconds)"
+        depends on LWM2M_BOOTSTRAP
+        default 0
+        range 0 86400
+        help
+            Bootstrap Server Account lifetime (0 = no timeout).
+            After this time, device will re-bootstrap.
+
+endmenu
 
 config LWM2M_SECURITY_PSK_ID
     string "DTLS PSK Identity (if coaps)"
@@ -306,4 +384,57 @@ config GEOLOC_FALLBACK_LON
     help
         Longitude used as initial value if no persisted location exists.
 
+endmenu
+
+menu "LwM2M Network Selection"
+    config LWM2M_NETWORK_USE_WIFI
+        bool "Use WiFi connectivity" 
+        default y
+    config LWM2M_NETWORK_USE_THREAD
+        bool "Use Thread (OpenThread) connectivity"
+        depends on OPENTHREAD_ENABLED
+        default n
+    comment "Enable exactly one or both (runtime selection TBD). Currently if THREAD is enabled WiFi init still happens unless manually disabled."
+endmenu
+
+menu "Thread Joiner Commissioning"
+    depends on LWM2M_NETWORK_USE_THREAD
+    config LWM2M_THREAD_JOINER
+        bool "Enable Thread Joiner commissioning"
+        default y
+        help
+            Start the OpenThread Joiner process using the PSKd to attach to an external Border Router.
+    config LWM2M_THREAD_JOINER_PSKD
+        string "Thread Joiner PSKd"
+        depends on LWM2M_THREAD_JOINER
+        default "J01NME"
+        help
+            The Pre-Shared Key for Device (PSKd) used during Joiner commissioning. Must match what the Border Router expects.
+endmenu
+
+menu "LwM2M Dynamic Discovery"
+    config LWM2M_DNS_DISCOVERY_ENABLE
+        bool "Enable DNS discovery of LwM2M server"
+        default y
+        help
+            If enabled, device intentará resolver el hostname configurado para obtener la IP del servidor LwM2M (p.ej. en red Thread via SRP/DNS-SD).
+    config LWM2M_DNS_DISCOVERY_HOST
+        string "Discovery hostname"
+        depends on LWM2M_DNS_DISCOVERY_ENABLE
+        default "leshan.default.service.arpa"
+        help
+            Hostname a resolver dinámicamente. Debe existir un registro AAAA (o resolverse internamente) dentro de la red.
+    config LWM2M_DNS_DISCOVERY_PORT
+        int "Discovery port"
+        depends on LWM2M_DNS_DISCOVERY_ENABLE
+        range 1 65535
+        default 5
+        help
+            Puerto CoAP (5685) o CoAPS (5684) del servidor descubierto.
+    config LWM2M_DNS_DISCOVERY_SECURE
+        bool "Use DTLS (coaps://) for discovered server"
+        depends on LWM2M_DNS_DISCOVERY_ENABLE
+        default n
+        help
+            Si se habilita, construye URI coaps:// en lugar de coap:// (requiere credenciales DTLS configuradas en Security Object).
 endmenu

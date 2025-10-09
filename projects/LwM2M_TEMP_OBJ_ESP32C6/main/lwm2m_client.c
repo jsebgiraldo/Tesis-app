@@ -24,6 +24,7 @@
 #include "connectivity_object.h"
 #include "location_object.h"
 #include "bac19_object.h"
+#include "thingsboard_provision.h"
 
 #include <anjay/anjay.h>
 #include <anjay/security.h>
@@ -45,10 +46,6 @@
 
 #ifndef CONFIG_LWM2M_TASK_STACK_SIZE
 #define CONFIG_LWM2M_TASK_STACK_SIZE 8192
-#endif
-
-#ifndef CONFIG_LWM2M_START_DELAY_MS
-#define CONFIG_LWM2M_START_DELAY_MS 1000
 #endif
 
 // Send feature optional; rely primarily on Observe/Notify
@@ -76,6 +73,10 @@
 
 #ifndef CONFIG_LWM2M_SERVER_PORT
 #define CONFIG_LWM2M_SERVER_PORT 5685
+#endif
+
+#ifndef CONFIG_LWM2M_SERVER_LIFETIME
+#define CONFIG_LWM2M_SERVER_LIFETIME 300
 #endif
 
 // Fallback observe notification period if server does not set pmax (seconds)
@@ -217,6 +218,9 @@ static void ensure_dns_gateway(void) {
 
 
 // --- Helpers: PSK parsing and retry backoff ---
+// Only needed in non-Bootstrap mode
+#if !CONFIG_LWM2M_BOOTSTRAP
+__attribute__((unused))
 static size_t hex_to_bytes(const char *hex, uint8_t *out, size_t out_size) {
     size_t len = strlen(hex);
     if (len % 2 != 0) {
@@ -242,6 +246,7 @@ static size_t hex_to_bytes(const char *hex, uint8_t *out, size_t out_size) {
     }
     return bytes;
 }
+#endif // !CONFIG_LWM2M_BOOTSTRAP
 // Deprecated: LWM2M_SERVER_URI removed; we now build from hostname, scheme, and port
 
 // Resolve hostname to IPv4 string; returns true on success
@@ -273,8 +278,78 @@ static bool resolve_hostname_ipv4(const char *hostname, char *ip_out, size_t ip_
     return ok;
 }
 
+// DNS discovery (Thread SRP / dynamic) helper
+#if CONFIG_LWM2M_DNS_DISCOVERY_ENABLE
+static bool discover_lwm2m_server_uri(char *out_uri, size_t out_len) {
+    if (!out_uri || out_len < 16) {
+        return false;
+    }
+    const char *host = CONFIG_LWM2M_DNS_DISCOVERY_HOST;
+    if (!host || !*host) {
+        return false;
+    }
+    int port = CONFIG_LWM2M_DNS_DISCOVERY_PORT;
+    bool secure = false;
+#ifdef CONFIG_LWM2M_DNS_DISCOVERY_SECURE
+    secure = true;
+#endif
+    struct addrinfo hints = {0};
+    hints.ai_family = AF_UNSPEC; // prefer IPv6 but accept IPv4
+    hints.ai_socktype = SOCK_DGRAM;
+    struct addrinfo *res = NULL;
+    int err = getaddrinfo(host, NULL, &hints, &res);
+    if (err != 0 || !res) {
+        ESP_LOGW(TAG, "DNS discovery: getaddrinfo('%s') failed: %d", host, err);
+        return false;
+    }
+    char addrstr[INET6_ADDRSTRLEN] = {0};
+    bool success = false;
+    // Two-pass: first try IPv6 ULA/GUA, then fallback to IPv4
+    for (int pass = 0; pass < 2 && !success; ++pass) {
+        for (struct addrinfo *p = res; p; p = p->ai_next) {
+            if (pass == 0 && p->ai_family != AF_INET6) continue;
+            if (pass == 1 && p->ai_family != AF_INET) continue;
+            if (p->ai_family == AF_INET6) {
+                struct sockaddr_in6 *sa6 = (struct sockaddr_in6 *) p->ai_addr;
+                // Skip link-local fe80 if tenemos otra opción
+                if (sa6->sin6_addr.s6_addr[0] == 0xfe && (sa6->sin6_addr.s6_addr[1] & 0xc0) == 0x80) {
+                    continue;
+                }
+                if (inet_ntop(AF_INET6, &sa6->sin6_addr, addrstr, sizeof(addrstr))) {
+                    snprintf(out_uri, out_len, "%s://[%s]:%d", secure?"coaps":"coap", addrstr, port);
+                    success = true;
+                    break;
+                }
+            } else if (p->ai_family == AF_INET) {
+                struct sockaddr_in *sa = (struct sockaddr_in *) p->ai_addr;
+                if (inet_ntop(AF_INET, &sa->sin_addr, addrstr, sizeof(addrstr))) {
+                    snprintf(out_uri, out_len, "%s://%s:%d", secure?"coaps":"coap", addrstr, port);
+                    success = true;
+                    break;
+                }
+            }
+        }
+    }
+    freeaddrinfo(res);
+    if (success) {
+        ESP_LOGI(TAG, "DNS discovery success: %s", out_uri);
+    } else {
+        ESP_LOGW(TAG, "DNS discovery: no usable address for %s", host);
+    }
+    return success;
+}
+#endif // CONFIG_LWM2M_DNS_DISCOVERY_ENABLE
+
 // Build final server URI, optionally replacing host with resolved IP from override hostname
+// Only used in non-Bootstrap mode
+#if !CONFIG_LWM2M_BOOTSTRAP
+__attribute__((unused))
 static void build_final_server_uri(char *out, size_t out_size) {
+#if CONFIG_LWM2M_DNS_DISCOVERY_ENABLE
+    if (discover_lwm2m_server_uri(out, out_size)) {
+        return; // Discovered URI already placed
+    }
+#endif
     // Determine scheme and port from Kconfig choices
     const bool is_secure =
 #if CONFIG_LWM2M_SERVER_SCHEME_COAPS
@@ -326,28 +401,36 @@ static void build_final_server_uri(char *out, size_t out_size) {
     (void) snprintf(out, out_size, "%s://%s:%d", is_secure ? "coaps" : "coap", host, port);
     ESP_LOGI(TAG, "Final LwM2M Server URI: %s", out);
 }
+#endif // !CONFIG_LWM2M_BOOTSTRAP
 
 static int setup_security(anjay_t *anjay) {
     // purge any existing Security(0) instances before configuring
     anjay_security_object_purge(anjay);
 
+    // Check if we need Bootstrap provisioning (ThingsBoard integration)
+#if CONFIG_LWM2M_BOOTSTRAP
+    // Check if device is already provisioned
+    if (thingsboard_is_provisioned()) {
+        ESP_LOGI(TAG, "Device already provisioned, loading credentials from NVS");
+        // Load provisioned credentials and add Security/Server instances
+        return thingsboard_load_credentials(anjay);
+    } else {
+        ESP_LOGI(TAG, "Device NOT provisioned, setting up Bootstrap");
+        // Setup Bootstrap Security object for auto-provisioning
+        return thingsboard_setup_bootstrap(anjay, g_endpoint_name);
+    }
+#else
+    // Normal mode: direct LwM2M Server connection (no Bootstrap)
     anjay_security_instance_t sec = {
         .ssid = CONFIG_LWM2M_SERVER_SHORT_ID,
         .security_mode = ANJAY_SECURITY_NOSEC,
+        .bootstrap_server = false,
     };
 
-    // Configure server URI based on bootstrap mode
-#if CONFIG_LWM2M_BOOTSTRAP
-    sec.bootstrap_server = true;
-    sec.server_uri = CONFIG_LWM2M_BOOTSTRAP_URI;
-#else
-    sec.bootstrap_server = false;
-    sec.ssid = CONFIG_LWM2M_SERVER_SHORT_ID;
     // Build final server URI from scheme/hostname/port
     static char server_uri_buf[160];
     build_final_server_uri(server_uri_buf, sizeof(server_uri_buf));
     sec.server_uri = server_uri_buf;
-#endif
 
     // Configure PSK if requested and using coaps
     const char *uri = sec.server_uri;
@@ -377,12 +460,9 @@ static int setup_security(anjay_t *anjay) {
         ESP_LOGE(TAG, "Failed to add Security instance: %d", result);
         return result;
     }
-    #if CONFIG_LWM2M_BOOTSTRAP
-    ESP_LOGI(TAG, "Security(0) instance added (iid=%ld) [bootstrap]", (long) sec_iid);
-    #else
     ESP_LOGI(TAG, "Security(0) instance added (iid=%ld)", (long) sec_iid);
-    #endif
     return 0;
+#endif
 }
 
 static int setup_server(anjay_t *anjay) {
@@ -444,11 +524,6 @@ static void lwm2m_client_task(void *arg) {
     const anjay_dm_object_def_t **dev_obj = NULL;
     const anjay_dm_object_def_t **loc_obj = NULL;
     const anjay_dm_object_def_t **bac_obj = NULL;
-    // Optional delay to let Wi‑Fi/ARP settle before first Register
-    if (CONFIG_LWM2M_START_DELAY_MS > 0) {
-        ESP_LOGI(TAG, "Startup delay %d ms before LwM2M init", (int) CONFIG_LWM2M_START_DELAY_MS);
-        vTaskDelay(pdMS_TO_TICKS(CONFIG_LWM2M_START_DELAY_MS));
-    }
     // Resolve endpoint name (from config or MAC) and log it once
     resolve_endpoint_name();
     ESP_LOGI(TAG, "LwM2M Endpoint: %s", g_endpoint_name);
@@ -481,15 +556,33 @@ static void lwm2m_client_task(void *arg) {
 // Note: Attribute Storage no longer requires explicit install in recent Anjay.
 // If compiled with CONFIG_ANJAY_WITH_ATTR_STORAGE, it is auto-installed.
 
+    // Initialize ThingsBoard provisioning module
+#if CONFIG_LWM2M_BOOTSTRAP
+    thingsboard_provision_init();
+    ESP_LOGI(TAG, "ThingsBoard provisioning initialized");
+#endif
+
     if (anjay_security_object_install(anjay)
         || anjay_server_object_install(anjay)) {
         ESP_LOGE(TAG, "Could not install Security/Server objects");
         goto cleanup;
     }
 
+    // Setup Security and Server objects (with Bootstrap support)
     if (setup_security(anjay) || setup_server(anjay)) {
         goto cleanup;
     }
+
+    // If device is already provisioned, load stored credentials
+#if CONFIG_LWM2M_BOOTSTRAP
+    if (thingsboard_is_provisioned()) {
+        ESP_LOGI(TAG, "Loading provisioned ThingsBoard credentials");
+        if (thingsboard_load_credentials(anjay) != 0) {
+            ESP_LOGW(TAG, "Failed to load credentials, will bootstrap again");
+            thingsboard_clear_credentials();
+        }
+    }
+#endif
 
     // Register IPSO-compliant Temperature (3303) object with min/max/reset resources
     if (anjay_register_object(anjay, temp_object_def())) {
@@ -581,17 +674,25 @@ static void lwm2m_client_task(void *arg) {
     (void) esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &lwm2m_net_event_handler, anjay, &inst_wifi);
     (void) esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &lwm2m_net_event_handler, anjay, &inst_ip);
 
-    ESP_LOGI(TAG, "Entering LwM2M main loop (server-driven updates).");
+    // Since WiFi is already connected when we start Anjay, manually trigger online mode
+    ESP_LOGI(TAG, "WiFi already connected, forcing Anjay online mode");
+    int result = anjay_transport_exit_offline(anjay, ANJAY_TRANSPORT_SET_ALL);
+    ESP_LOGI(TAG, "exit_offline result: %d", result);
+    
+    ESP_LOGI(TAG, "Entering LwM2M main loop - direct connection mode");
     // Initial hint right after starting: mark sensor objects as changed so server may read/observe
     (void) anjay_notify_instances_changed(anjay, 3303);
     (void) anjay_notify_instances_changed(anjay, 3304);
     (void) anjay_notify_instances_changed(anjay, 4); // Connectivity Monitoring
 
     // Install Firmware Update object
-    if (fw_update_install(anjay)) {
-        ESP_LOGE(TAG, "Could not install Firmware Update object");
+    ESP_LOGI(TAG, "Installing Firmware Update object...");
+    int fw_result = fw_update_install(anjay);
+    if (fw_result) {
+        ESP_LOGE(TAG, "Could not install Firmware Update object (error %d)", fw_result);
         goto cleanup;
     }
+    ESP_LOGI(TAG, "Firmware Update object installed successfully");
 
     const avs_time_duration_t max_wait = avs_time_duration_from_scalar(100, AVS_TIME_MS);
     uint32_t attr_persist_ticks = 0; // ~periodic persistence timer

@@ -174,7 +174,7 @@ config LWM2M_BOOTSTRAP
 config LWM2M_BOOTSTRAP_URI
     string "Bootstrap Server URI (coap(s)://host:port)"
     depends on LWM2M_BOOTSTRAP
-    default "coap://thingsboard.edge:5685"
+    default "coap://thingsboard.edge:5683"
 
 config LWM2M_SECURITY_PSK_ID
     string "DTLS PSK Identity (if coaps)"

@@ -1,6 +1,6 @@
 services:
   leshan:
-    image: altshiftcreative/leshan-server:1.0.4
+    image: edgenesis/lwm2m-demo-leshan-server:nightly
     restart: always
     ports:
       # Web UI (Leshan default 8080). Host usa 8081 para evitar conflicto con ThingsBoard (8080)

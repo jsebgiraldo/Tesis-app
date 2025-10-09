@@ -75,26 +75,25 @@ static int list_resources(anjay_t *anjay,
                           anjay_iid_t iid,
                           anjay_dm_resource_list_ctx_t *ctx) {
     (void) anjay; (void) obj_ptr; (void) iid;
-    // MUST be strictly ascending order of Resource IDs
-    anjay_dm_emit_res(ctx, RID_MANUFACTURER,              ANJAY_DM_RES_R,  ANJAY_DM_RES_PRESENT); // 0
-    anjay_dm_emit_res(ctx, RID_MODEL_NUMBER,              ANJAY_DM_RES_R,  ANJAY_DM_RES_PRESENT); // 1
-    anjay_dm_emit_res(ctx, RID_SERIAL_NUMBER,             ANJAY_DM_RES_R,  ANJAY_DM_RES_PRESENT); // 2
-    anjay_dm_emit_res(ctx, RID_FIRMWARE_VERSION,          ANJAY_DM_RES_R,  ANJAY_DM_RES_PRESENT); // 3
-    anjay_dm_emit_res(ctx, RID_REBOOT,                    ANJAY_DM_RES_E,  ANJAY_DM_RES_PRESENT); // 4
-    anjay_dm_emit_res(ctx, RID_POWER_SOURCE_VOLTAGE,      ANJAY_DM_RES_R,  ANJAY_DM_RES_PRESENT); // 7
-    anjay_dm_emit_res(ctx, RID_POWER_SOURCE_CURRENT,      ANJAY_DM_RES_R,  ANJAY_DM_RES_PRESENT); // 8
-    anjay_dm_emit_res(ctx, RID_BATTERY_LEVEL,             ANJAY_DM_RES_R,  ANJAY_DM_RES_PRESENT); // 9
-    anjay_dm_emit_res(ctx, RID_MEMORY_FREE,               ANJAY_DM_RES_R,  ANJAY_DM_RES_PRESENT); // 10
-    anjay_dm_emit_res(ctx, RID_ERROR_CODE,                ANJAY_DM_RES_RM, ANJAY_DM_RES_PRESENT); // 11 (multi-instance)
-    anjay_dm_emit_res(ctx, RID_CURRENT_TIME,              ANJAY_DM_RES_R,  ANJAY_DM_RES_PRESENT); // 13
-    anjay_dm_emit_res(ctx, RID_UTC_OFFSET,                ANJAY_DM_RES_RW, ANJAY_DM_RES_PRESENT); // 14
-    anjay_dm_emit_res(ctx, RID_TIMEZONE,                  ANJAY_DM_RES_RW, ANJAY_DM_RES_PRESENT); // 15
-    anjay_dm_emit_res(ctx, RID_SUPPORTED_BINDING_AND_MODES, ANJAY_DM_RES_R, ANJAY_DM_RES_PRESENT); //16
-    anjay_dm_emit_res(ctx, RID_DEVICE_TYPE,               ANJAY_DM_RES_R,  ANJAY_DM_RES_PRESENT); // 17
-    anjay_dm_emit_res(ctx, RID_HARDWARE_VERSION,          ANJAY_DM_RES_R,  ANJAY_DM_RES_PRESENT); // 18
-    anjay_dm_emit_res(ctx, RID_SOFTWARE_VERSION,          ANJAY_DM_RES_R,  ANJAY_DM_RES_PRESENT); // 19
-    anjay_dm_emit_res(ctx, RID_BATTERY_STATUS,            ANJAY_DM_RES_R,  ANJAY_DM_RES_PRESENT); // 20
-    anjay_dm_emit_res(ctx, RID_MEMORY_TOTAL,              ANJAY_DM_RES_R,  ANJAY_DM_RES_PRESENT); // 21
+    anjay_dm_emit_res(ctx, RID_MANUFACTURER, ANJAY_DM_RES_R, ANJAY_DM_RES_PRESENT);
+    anjay_dm_emit_res(ctx, RID_MODEL_NUMBER, ANJAY_DM_RES_R, ANJAY_DM_RES_PRESENT);
+    anjay_dm_emit_res(ctx, RID_SERIAL_NUMBER, ANJAY_DM_RES_R, ANJAY_DM_RES_PRESENT);
+    anjay_dm_emit_res(ctx, RID_FIRMWARE_VERSION, ANJAY_DM_RES_R, ANJAY_DM_RES_PRESENT);
+    anjay_dm_emit_res(ctx, RID_REBOOT, ANJAY_DM_RES_E, ANJAY_DM_RES_PRESENT);
+    anjay_dm_emit_res(ctx, RID_ERROR_CODE, ANJAY_DM_RES_RM, ANJAY_DM_RES_PRESENT);
+    anjay_dm_emit_res(ctx, RID_CURRENT_TIME, ANJAY_DM_RES_R, ANJAY_DM_RES_PRESENT);
+    anjay_dm_emit_res(ctx, RID_UTC_OFFSET, ANJAY_DM_RES_RW, ANJAY_DM_RES_PRESENT);
+    anjay_dm_emit_res(ctx, RID_TIMEZONE, ANJAY_DM_RES_RW, ANJAY_DM_RES_PRESENT);
+    anjay_dm_emit_res(ctx, RID_SUPPORTED_BINDING_AND_MODES, ANJAY_DM_RES_R, ANJAY_DM_RES_PRESENT);
+    anjay_dm_emit_res(ctx, RID_DEVICE_TYPE, ANJAY_DM_RES_R, ANJAY_DM_RES_PRESENT);
+    anjay_dm_emit_res(ctx, RID_HARDWARE_VERSION, ANJAY_DM_RES_R, ANJAY_DM_RES_PRESENT);
+    anjay_dm_emit_res(ctx, RID_SOFTWARE_VERSION, ANJAY_DM_RES_R, ANJAY_DM_RES_PRESENT);
+    anjay_dm_emit_res(ctx, RID_BATTERY_STATUS, ANJAY_DM_RES_R, ANJAY_DM_RES_PRESENT);
+    anjay_dm_emit_res(ctx, RID_MEMORY_TOTAL, ANJAY_DM_RES_R, ANJAY_DM_RES_PRESENT);
+    anjay_dm_emit_res(ctx, RID_BATTERY_LEVEL, ANJAY_DM_RES_R, ANJAY_DM_RES_PRESENT);
+    anjay_dm_emit_res(ctx, RID_MEMORY_FREE, ANJAY_DM_RES_R, ANJAY_DM_RES_PRESENT);
+    anjay_dm_emit_res(ctx, RID_POWER_SOURCE_VOLTAGE, ANJAY_DM_RES_R, ANJAY_DM_RES_PRESENT);
+    anjay_dm_emit_res(ctx, RID_POWER_SOURCE_CURRENT, ANJAY_DM_RES_R, ANJAY_DM_RES_PRESENT);
     return 0;
 }
 
@@ -217,8 +216,7 @@ static int resource_read(anjay_t *anjay,
         assert(riid == ANJAY_ID_INVALID);
         return anjay_ret_i32(ctx, obj->power_current_ma);
     default:
-        ESP_LOGW(TAG, "Unhandled Device resource read RID=%d", rid);
-        return ANJAY_ERR_NOT_FOUND;
+        return ANJAY_ERR_METHOD_NOT_ALLOWED;
     }
 }
 

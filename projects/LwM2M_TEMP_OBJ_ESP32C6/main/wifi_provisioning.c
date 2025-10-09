@@ -161,6 +161,7 @@ static void wifi_prov_print_qr(const char *name, const char *username, const cha
         return;
     }
     char payload[128] = {0};
+    char encoded[256] = {0};
     
     // Create JSON payload for QR code using string concatenation
     const char *ver = PROV_QR_VERSION;
@@ -193,12 +194,30 @@ static void wifi_prov_print_qr(const char *name, const char *username, const cha
         strcat(payload, "}");
     }
     
+    // Percent-encode JSON so the helper page can render a valid QR image
+    // Encode all characters except unreserved [A-Za-z0-9-_.~]
+    const char *src = payload;
+    size_t wi = 0;
+    while (*src && wi + 4 < sizeof(encoded)) {
+        char c = *src++;
+        bool unres = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c=='-' || c=='_' || c=='.' || c=='~';
+        if (unres) {
+            encoded[wi++] = c;
+        } else {
+            static const char hex[] = "0123456789ABCDEF";
+            encoded[wi++] = '%';
+            encoded[wi++] = hex[(c >> 4) & 0x0F];
+            encoded[wi++] = hex[c & 0x0F];
+        }
+    }
+    encoded[wi] = '\0';
+
 #ifdef CONFIG_PROV_SHOW_QR
-    ESP_LOGI(TAG, "Scan this QR code from the provisioning application for Provisioning.");
+    ESP_LOGW(TAG, "Nota: el QR en consola es solo un placeholder ASCII y NO es escaneable.");
     esp_qrcode_config_t cfg = ESP_QRCODE_CONFIG_DEFAULT();
     esp_qrcode_generate(&cfg, payload);
 #endif /* CONFIG_PROV_SHOW_QR */
-    ESP_LOGI(TAG, "If QR code is not visible, copy paste the below URL in a browser.\n%s?data=%s", QRCODE_BASE_URL, payload);
+    ESP_LOGI(TAG, "Abre esta URL en un navegador para ver un QR escaneable:\n%s?data=%s", QRCODE_BASE_URL, encoded);
 }
 
 #ifdef CONFIG_PROV_TRANSPORT_BLE

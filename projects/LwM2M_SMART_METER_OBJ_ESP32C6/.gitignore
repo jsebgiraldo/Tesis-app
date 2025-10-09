@@ -3,5 +3,3 @@ sdkconfig
 sdkconfig.old
 .vscode/
 .idea/
-
-managed_components/

@@ -9,6 +9,7 @@
 #include "wifi_provisioning.h"
 #include "led_status.h"
 #include "driver/gpio.h"
+#include "thread_prov.h"
 
 void lwm2m_client_start(void);
 
@@ -97,21 +98,36 @@ void app_main(void) {
         return;
     }
 
-    // Initialize LED status and factory reset monitor first so LED shows provisioning state
     led_status_init();
     xTaskCreate(factory_reset_task, "factory_reset", 3072, NULL, 6, NULL);
 
+#if CONFIG_LWM2M_NETWORK_USE_THREAD
+    ESP_LOGI(TAG, "Thread network selected. Starting Joiner (if enabled)...");
+    if (!thread_prov_start()) {
+        ESP_LOGW(TAG, "Thread provisioning not started or failed. Fallback to WiFi if enabled.");
+    } else {
+        // Wait for attachment with timeout
+        const TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(30000);
+        while (!thread_prov_is_attached() && xTaskGetTickCount() < deadline) {
+            vTaskDelay(pdMS_TO_TICKS(500));
+        }
+        if (thread_prov_is_attached()) {
+            ESP_LOGI(TAG, "Thread attached; starting LwM2M client.");
+            lwm2m_client_start();
+            return; // Done
+        } else {
+            ESP_LOGW(TAG, "Thread attach timeout. Will attempt WiFi path if enabled.");
+        }
+    }
+#endif
+#if CONFIG_LWM2M_NETWORK_USE_WIFI
     ESP_LOGI(TAG, "Starting WiFi Provisioning...");
-
-    // Initialize WiFi provisioning system
     wifi_provisioning_init();
-
-    // Wait for WiFi connection (either through provisioning or normal connection)
     ESP_LOGI(TAG, "Waiting for WiFi connection...");
     wifi_provisioning_wait_connected();
-
     ESP_LOGI(TAG, "WiFi connected! Starting LwM2M client...");
-
-    // Start LwM2M client (stub by default; replace with Anjay integration)
     lwm2m_client_start();
+#else
+    ESP_LOGE(TAG, "No network backend enabled (Thread or WiFi). Enable one in Kconfig.");
+#endif
 }
