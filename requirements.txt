@@ -1,0 +1,32 @@
+# ThingsBoard SDK
+tb-mqtt-client>=1.9.0
+
+# MQTT
+paho-mqtt>=1.6.1
+
+# Modbus
+pymodbus>=3.5.0
+
+# DLMS/COSEM
+gurux-dlms>=1.0.155
+
+# Network tools
+scapy>=2.5.0
+requests>=2.31.0
+
+# Data analysis
+pandas>=2.1.0
+matplotlib>=3.8.0
+jupyter>=1.0.0
+notebook>=7.0.0
+
+# Testing
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+
+# Monitoring
+prometheus-client>=0.18.0
+
+# Utilities
+python-dotenv>=1.0.0
+pyyaml>=6.0.1

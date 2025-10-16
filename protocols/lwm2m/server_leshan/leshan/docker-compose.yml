@@ -1,0 +1,12 @@
+services:
+  leshan:
+    image: edgenesis/lwm2m-demo-leshan-server:nightly
+    restart: always
+    ports:
+      # Web UI (Leshan default 8080). Host usa 8081 para evitar conflicto con ThingsBoard (8080)
+      - "8082:8080"
+      # CoAP/CoAPS estándar en host 5683/5684
+      # NOTA: No correr ThingsBoard al mismo tiempo si publica 5683-5688/udp o 5683/5684, porque entra en conflicto con estos puertos.
+      - "5683:5683/udp"
+      - "5684:5684/udp"
+    environment: {}

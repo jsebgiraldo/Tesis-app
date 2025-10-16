@@ -1,0 +1,15 @@
+services:
+  postgres:
+    ports:
+      - "5543:5432"
+  redis:
+    ports:
+      - "56379:6379"
+  influxdb:
+    ports:
+      - "58086:8086"
+  nginx:
+    ports:
+      - "18091:80"
+      - "18445:443"
+      - "18092:80"

@@ -1,20 +1,59 @@
+# Build artifacts
+build/
+dist/
+*.bin
+*.elf
+*.map
+
+# ESP-IDF
+sdkconfig
+sdkconfig.old
+dependencies.lock
+
 # Python
 __pycache__/
 *.pyc
+*.pyo
+*.egg-info/
+venv/
 .venv/
+*.ipynb_checkpoints/
 
-# VSCode
+# Data (captures y resultados grandes)
+data/captures/pcaps/*.pcapng
+data/captures/logs/*.log
+*.pcap
+
+# Secrets y configuraciones locales
+.env
+*.key
+*.pem
+*.crt
+credentials*.json
+
+# IDEs
 .vscode/
+.idea/
+*.swp
+*.swo
 
-# pcaps and logs
-/data/pcaps/*.pcap
-/data/pcaps/*.pcapng
-/logs/
+# OS
+.DS_Store
+Thumbs.db
 
-# ESP-IDF build
-**/build/
-**/sdkconfig
-**/sdkconfig.old
+# LaTeX
+*.aux
+*.log
+*.out
+*.toc
+*.bbl
+*.blg
+*.synctex.gz
 
-# Secrets / env files
-docker/**/.env
+# Backups
+backups/*.tar.gz
+backups/*.zip
+
+# Docker volumes
+**/data/postgres/
+**/data/cassandra/

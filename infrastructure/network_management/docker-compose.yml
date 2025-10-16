@@ -1,0 +1,284 @@
+services:
+  postgres:
+    image: postgis/postgis:16-3.4
+    restart: always
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-openwisp}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-openwisp_password}
+    volumes:
+      - ow_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-openwisp}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - openwisp_net
+
+  redis:
+    image: redis:7-alpine
+    restart: always
+    volumes:
+      - ow_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    networks:
+      - openwisp_net
+
+  influxdb:
+    image: influxdb:1.8-alpine
+    restart: always
+    environment:
+      INFLUXDB_DB: ${INFLUXDB_DB:-openwisp}
+    volumes:
+      - ow_influxdb_data:/var/lib/influxdb
+    networks:
+      - openwisp_net
+
+  dashboard:
+    image: openwisp/openwisp-dashboard:24.11.2
+    restart: always
+    environment:
+      DEBUG_MODE: ${DEBUG_MODE:-False}
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-openwisp_secret_key_change_me_in_production}
+      DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-*}
+      DASHBOARD_DOMAIN: ${DASHBOARD_DOMAIN:-localhost:8091}
+      SSL_CERT_MODE: ${SSL_CERT_MODE:-SelfSigned}
+      API_DOMAIN: ${API_DOMAIN:-localhost:8092}
+      DB_ENGINE: django.contrib.gis.db.backends.postgis
+      DB_NAME: ${POSTGRES_DB:-openwisp}
+      DB_USER: ${POSTGRES_USER:-postgres}
+      DB_PASS: ${POSTGRES_PASSWORD:-openwisp_password}
+      DB_SSLMODE: ${DB_SSLMODE:-disable}
+      DB_SSLCERT: ${DB_SSLCERT:-}
+      DB_SSLKEY: ${DB_SSLKEY:-}
+      DB_SSLROOTCERT: ${DB_SSLROOTCERT:-}
+      DB_OPTIONS: ${DB_OPTIONS:-{}}
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      INFLUXDB_HOST: influxdb
+      INFLUXDB_PORT: "8086"
+      INFLUXDB_NAME: ${INFLUXDB_DB:-openwisp}
+      EMAIL_BACKEND: django.core.mail.backends.console.EmailBackend
+      UWSGI_PROCESSES: ${UWSGI_PROCESSES:-2}
+      UWSGI_THREADS: ${UWSGI_THREADS:-2}
+      UWSGI_LISTEN: ${UWSGI_LISTEN:-128}
+    volumes:
+      - ./custom_settings_rw/custom_django_settings.py:/opt/openwisp/openwisp/configuration/custom_django_settings.py:ro
+      - ow_static:/opt/openwisp/static
+      - ow_media:/opt/openwisp/media
+      - ow_private:/opt/openwisp/private
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      influxdb:
+        condition: service_started
+    networks:
+      - openwisp_net
+
+  api:
+    image: openwisp/openwisp-api:24.11.2
+    restart: always
+    environment:
+      DEBUG_MODE: ${DEBUG_MODE:-False}
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-openwisp_secret_key_change_me_in_production}
+      DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-*}
+      DASHBOARD_DOMAIN: ${DASHBOARD_DOMAIN:-localhost:8091}
+      API_DOMAIN: ${API_DOMAIN:-localhost:8092}
+      DB_ENGINE: django.contrib.gis.db.backends.postgis
+      DB_NAME: ${POSTGRES_DB:-openwisp}
+      DB_USER: ${POSTGRES_USER:-postgres}
+      DB_PASS: ${POSTGRES_PASSWORD:-openwisp_password}
+      DB_SSLMODE: ${DB_SSLMODE:-disable}
+      DB_SSLCERT: ${DB_SSLCERT:-}
+      DB_SSLKEY: ${DB_SSLKEY:-}
+      DB_SSLROOTCERT: ${DB_SSLROOTCERT:-}
+      DB_OPTIONS: ${DB_OPTIONS:-{}}
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      SSL_CERT_MODE: ${SSL_CERT_MODE:-SelfSigned}
+      USE_OPENWISP_CELERY_NETWORK: ${USE_OPENWISP_CELERY_NETWORK:-False}
+      USE_OPENWISP_CELERY_MONITORING: ${USE_OPENWISP_CELERY_MONITORING:-False}
+      USE_OPENWISP_CELERY_FIRMWARE: ${USE_OPENWISP_CELERY_FIRMWARE:-False}
+      USE_OPENWISP_FIRMWARE: ${USE_OPENWISP_FIRMWARE:-False}
+      USE_OPENWISP_MONITORING: ${USE_OPENWISP_MONITORING:-False}
+      UWSGI_PROCESSES: ${UWSGI_PROCESSES:-2}
+      UWSGI_THREADS: ${UWSGI_THREADS:-2}
+      UWSGI_LISTEN: ${UWSGI_LISTEN:-128}
+    volumes:
+      - ./custom_settings_rw/custom_django_settings.py:/opt/openwisp/openwisp/configuration/custom_django_settings.py:ro
+      - ow_media:/opt/openwisp/media
+      - ow_private:/opt/openwisp/private
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      dashboard:
+        condition: service_started
+    networks:
+      - openwisp_net
+
+  websocket:
+    image: openwisp/openwisp-websocket:24.11.2
+    restart: always
+    environment:
+      DEBUG_MODE: ${DEBUG_MODE:-False}
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-openwisp_secret_key_change_me_in_production}
+      DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-*}
+      DASHBOARD_DOMAIN: ${DASHBOARD_DOMAIN:-localhost:8091}
+      API_DOMAIN: ${API_DOMAIN:-localhost:8092}
+      SSL_CERT_MODE: ${SSL_CERT_MODE:-SelfSigned}
+      DB_ENGINE: django.contrib.gis.db.backends.postgis
+      DB_NAME: ${POSTGRES_DB:-openwisp}
+      DB_USER: ${POSTGRES_USER:-postgres}
+      DB_PASS: ${POSTGRES_PASSWORD:-openwisp_password}
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      USE_OPENWISP_CELERY_NETWORK: ${USE_OPENWISP_CELERY_NETWORK:-False}
+      USE_OPENWISP_CELERY_MONITORING: ${USE_OPENWISP_CELERY_MONITORING:-False}
+      USE_OPENWISP_CELERY_FIRMWARE: ${USE_OPENWISP_CELERY_FIRMWARE:-False}
+      USE_OPENWISP_FIRMWARE: ${USE_OPENWISP_FIRMWARE:-False}
+      USE_OPENWISP_MONITORING: ${USE_OPENWISP_MONITORING:-False}
+    depends_on:
+      dashboard:
+        condition: service_started
+    networks:
+      - openwisp_net
+
+  celery:
+    image: openwisp/openwisp-dashboard:24.11.2
+    restart: always
+    # Opción A: mantener contenedor Up sin ejecutar Celery
+    command: ["sh","-lc","python services.py database redis dashboard; tail -f /dev/null"]
+    environment:
+      MODULE_NAME: celery
+      DEBUG_MODE: ${DEBUG_MODE:-False}
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-openwisp_secret_key_change_me_in_production}
+      DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-*}
+      DB_ENGINE: django.contrib.gis.db.backends.postgis
+      DB_NAME: ${POSTGRES_DB:-openwisp}
+      DB_USER: ${POSTGRES_USER:-postgres}
+      DB_PASS: ${POSTGRES_PASSWORD:-openwisp_password}
+      DB_SSLMODE: ${DB_SSLMODE:-disable}
+      DB_SSLCERT: ${DB_SSLCERT:-}
+      DB_SSLKEY: ${DB_SSLKEY:-}
+      DB_SSLROOTCERT: ${DB_SSLROOTCERT:-}
+      DB_OPTIONS: ${DB_OPTIONS:-{}}
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      # Workaround Celery 5.x defaults: set statedb explicitly
+      OPENWISP_CELERY_COMMAND_FLAGS: "--concurrency=1 --pool=prefork --statedb=/opt/openwisp/celery.state --prefetch-multiplier=1"
+      CELERY_WORKER_STATE_DB: "/opt/openwisp/celery.state"
+      USE_OPENWISP_FIRMWARE: ${USE_OPENWISP_FIRMWARE:-False}
+      USE_OPENWISP_MONITORING: ${USE_OPENWISP_MONITORING:-False}
+      CELERY_WORKER_LOG_FORMAT: "[%(asctime)s: %(levelname)s/%(processName)s] %(message)s"
+      CELERY_WORKER_TASK_LOG_FORMAT: "[%(asctime)s: %(levelname)s/%(processName)s] Task %(task_name)s[%(task_id)s]: %(message)s"
+    volumes:
+      - ./custom_settings_rw/custom_django_settings.py:/opt/openwisp/openwisp/configuration/custom_django_settings.py:ro
+      - ow_media:/opt/openwisp/media
+      - ow_private:/opt/openwisp/private
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      dashboard:
+        condition: service_started
+    networks:
+      - openwisp_net
+
+  celerybeat:
+    image: openwisp/openwisp-dashboard:24.11.2
+    restart: always
+    # Opción A: mantener contenedor Up sin ejecutar Celery Beat
+    command: ["sh","-lc","python services.py database redis dashboard; tail -f /dev/null"]
+    environment:
+      MODULE_NAME: celerybeat
+      DEBUG_MODE: ${DEBUG_MODE:-False}
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-openwisp_secret_key_change_me_in_production}
+      DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-*}
+      DB_ENGINE: django.contrib.gis.db.backends.postgis
+      DB_NAME: ${POSTGRES_DB:-openwisp}
+      DB_USER: ${POSTGRES_USER:-postgres}
+      DB_PASS: ${POSTGRES_PASSWORD:-openwisp_password}
+      DB_SSLMODE: ${DB_SSLMODE:-disable}
+      DB_SSLCERT: ${DB_SSLCERT:-}
+      DB_SSLKEY: ${DB_SSLKEY:-}
+      DB_SSLROOTCERT: ${DB_SSLROOTCERT:-}
+      DB_OPTIONS: ${DB_OPTIONS:-{}}
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      USE_OPENWISP_FIRMWARE: ${USE_OPENWISP_FIRMWARE:-False}
+      USE_OPENWISP_MONITORING: ${USE_OPENWISP_MONITORING:-False}
+      CELERY_WORKER_LOG_FORMAT: "[%(asctime)s: %(levelname)s/%(processName)s] %(message)s"
+      CELERY_WORKER_TASK_LOG_FORMAT: "[%(asctime)s: %(levelname)s/%(processName)s] Task %(task_name)s[%(task_id)s]: %(message)s"
+    volumes:
+      - ./custom_settings/custom_django_settings.py:/opt/openwisp/openwisp/configuration/custom_django_settings.py:ro
+      - ow_media:/opt/openwisp/media
+      - ow_private:/opt/openwisp/private
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      dashboard:
+        condition: service_started
+    networks:
+      - openwisp_net
+
+  nginx:
+    image: openwisp/openwisp-nginx:24.11.2
+    restart: always
+    environment:
+      SSL_CERT_MODE: ${SSL_CERT_MODE:-SelfSigned}
+      DASHBOARD_DOMAIN: ${DASHBOARD_DOMAIN:-localhost:8091}
+      API_DOMAIN: ${API_DOMAIN:-localhost:8092}
+    volumes:
+      - ow_static:/opt/openwisp/public/static:ro
+      - ow_media:/opt/openwisp/public/media:ro
+      - ow_private:/opt/openwisp/public/private:ro
+    depends_on:
+      dashboard:
+        condition: service_started
+      api:
+        condition: service_started
+      websocket:
+        condition: service_started
+    networks:
+      - openwisp_net
+
+volumes:
+  ow_postgres_data:
+    driver: local
+  ow_redis_data:
+    driver: local
+  ow_static:
+    driver: local
+  ow_media:
+    driver: local
+  ow_private:
+    driver: local
+  ow_influxdb_data:
+    driver: local
+
+networks:
+  openwisp_net:
+    name: openwisp_net
+    driver: bridge

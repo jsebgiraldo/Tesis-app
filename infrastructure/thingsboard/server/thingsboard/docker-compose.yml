@@ -16,7 +16,7 @@ services:
       retries: 10
   kafka:
     restart: always
-    image: "bitnamilegacy/kafka:3.8.1"
+    image: bitnami/kafka:4.0
     ports:
       - "9092:9092" # to localhost:9092 from host machine
       - "9093" # for KRaft controller
@@ -42,7 +42,6 @@ services:
   thingsboard-ce:
     restart: always
     image: "thingsboard/tb-node:4.2.0"
-    hostname: thingsboard.server
     ports:
       - "8080:8080"
       - "7070:7070"
@@ -61,14 +60,6 @@ services:
       SPRING_DATASOURCE_PASSWORD: postgres
       TB_QUEUE_TYPE: kafka
       TB_KAFKA_SERVERS: kafka:9092
-      LWM2M_ENABLED: true
-      LWM2M_ENABLED_BS: true
-      LWM2M_BIND_PORT: 5685
-      LWM2M_SECURITY_BIND_PORT: 5686
-      LWM2M_BS_BIND_ADDRESS: 0.0.0.0
-      LWM2M_BS_BIND_PORT: 5687
-      LWM2M_BS_SECURITY_BIND_ADDRESS: 0.0.0.0
-      LWM2M_BS_SECURITY_BIND_PORT: 5688
     depends_on:
       postgres:
         condition: service_healthy
