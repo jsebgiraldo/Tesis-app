@@ -1,5 +1,5 @@
 #!/bin/bash
-# Script de ejemplo para leer voltaje y corriente del medidor Microstar del laboratorio
+# Script de ejemplo para leer mediciones del medidor Microstar del laboratorio
 #
 # Configuración del medidor:
 # - IP: 192.168.5.177
@@ -16,7 +16,7 @@ python3 dlms_reader.py \
   --server-logical 0 \
   --server-physical 1 \
   --password 22222222 \
-  --measurement voltage_l1 current_l1 \
+  --measurement voltage_l1 current_l1 frequency active_power active_energy \
   "$@"
 
 # Uso:

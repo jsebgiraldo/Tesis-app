@@ -398,6 +398,10 @@ def _parse_data(buffer: bytes) -> Tuple[Any, bytes]:
         if len(buffer) < 3:
             raise DlmsDataError("Malformed long-unsigned")
         return int.from_bytes(buffer[1:3], "big", signed=False), buffer[3:]
+    if tag == 0x14:  # long64-unsigned (64-bit unsigned)
+        if len(buffer) < 9:
+            raise DlmsDataError("Malformed long64-unsigned")
+        return int.from_bytes(buffer[1:9], "big", signed=False), buffer[9:]
     if tag == 0x16:  # enum
         if len(buffer) < 2:
             raise DlmsDataError("Malformed enum")
@@ -713,6 +717,21 @@ MEASUREMENTS: Dict[str, Dict[str, str]] = {
         "obis": "1-1:31.7.0",
         "description": "Phase A instantaneous current",
         "preferred_unit": "A",
+    },
+    "frequency": {
+        "obis": "1-1:14.7.0",
+        "description": "Supply frequency",
+        "preferred_unit": "Hz",
+    },
+    "active_power": {
+        "obis": "1-1:1.7.0",
+        "description": "Sum active power+ (QI+QIV)",
+        "preferred_unit": "W",
+    },
+    "active_energy": {
+        "obis": "1-1:1.8.0",
+        "description": "Active energy+ (import)",
+        "preferred_unit": "Wh",
     },
 }
 

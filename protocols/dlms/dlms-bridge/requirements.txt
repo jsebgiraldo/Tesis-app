@@ -1,0 +1,12 @@
+# DLMS-MQTT Bridge Requirements
+# Python 3.10+
+
+# MQTT client library
+aiomqtt==2.0.1
+
+# Settings management with pydantic
+pydantic==2.9.2
+pydantic-settings==2.6.1
+
+# The DLMS reader is imported from the parent directory
+# No additional DLMS libraries needed - we use the existing dlms_reader.py
