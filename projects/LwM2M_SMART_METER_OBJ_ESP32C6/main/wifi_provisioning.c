@@ -17,6 +17,7 @@
 #include <wifi_provisioning/scheme_ble.h>
 #include <wifi_provisioning/scheme_softap.h>
 #include "qrcode.h"
+#include "led_status.h"
 
 static const char *TAG = "wifi_prov";
 
@@ -56,6 +57,7 @@ static void event_handler(void* arg, esp_event_base_t event_base,
         switch (event_id) {
             case WIFI_PROV_START:
                 ESP_LOGI(TAG, "Provisioning started");
+                led_status_set_mode(LED_MODE_PROV_BLE);
                 break;
             case WIFI_PROV_CRED_RECV: {
                 wifi_sta_config_t *wifi_sta_cfg = (wifi_sta_config_t *)event_data;
@@ -93,7 +95,7 @@ static void event_handler(void* arg, esp_event_base_t event_base,
                 break;
             case WIFI_EVENT_STA_DISCONNECTED:
                 ESP_LOGI(TAG, "Disconnected. Connecting to the AP again...");
-                // LED removed: indicate via logs only
+                led_status_set_mode(LED_MODE_WIFI_FAIL);
                 esp_wifi_connect();
                 break;
 #ifdef CONFIG_PROV_TRANSPORT_SOFTAP
@@ -112,7 +114,7 @@ static void event_handler(void* arg, esp_event_base_t event_base,
         ESP_LOGI(TAG, "Connected with IP Address:" IPSTR, IP2STR(&event->ip_info.ip));
         /* Signal main application to continue execution */
         xEventGroupSetBits(wifi_event_group, WIFI_CONNECTED_EVENT);
-    // LED removed: indicate via logs only
+        led_status_set_mode(LED_MODE_WIFI_CONNECTED);
     }
 }
 

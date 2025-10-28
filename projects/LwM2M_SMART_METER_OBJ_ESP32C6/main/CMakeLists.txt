@@ -13,8 +13,9 @@ idf_component_register(
         "energy_accumulator.c"
         "connectivity_object.c"
         "bac19_object.c"
+        "led_status.c"
     INCLUDE_DIRS "." "${IDF_PATH}/components/app_update/include"
-    REQUIRES freertos esp_netif esp_wifi nvs_flash lwip anjay-esp-idf wifi_provisioning protocomm bt driver app_update esp_partition esp_https_ota esp_app_format esp_http_client json
+    REQUIRES freertos esp_netif esp_wifi nvs_flash lwip anjay-esp-idf wifi_provisioning protocomm bt driver app_update esp_partition esp_https_ota esp_app_format esp_http_client json led_strip
     PRIV_REQUIRES app_update
 )
 

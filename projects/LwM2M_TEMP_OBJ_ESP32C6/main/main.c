@@ -4,9 +4,15 @@
 #include "esp_log.h"
 #include "nvs_flash.h"
 #include "esp_sleep.h"
+#include "esp_netif.h"
+#include "esp_event.h"
 
 // Local modules
+// WiFi Provisioning disabled - using Thread only
+// #define ENABLE_WIFI_PROVISIONING
+#ifdef ENABLE_WIFI_PROVISIONING
 #include "wifi_provisioning.h"
+#endif
 #include "led_status.h"
 #include "driver/gpio.h"
 
@@ -97,10 +103,25 @@ void app_main(void) {
         return;
     }
 
+    // Initialize networking stack (required for both WiFi and Thread)
+    // NOTE: OpenThread platform initialization is now handled automatically
+    // by the anjay-esp-idf component when CONFIG_OPENTHREAD_ENABLED is set
+    ESP_ERROR_CHECK(esp_netif_init());
+    ESP_ERROR_CHECK(esp_event_loop_create_default());
+    
+    // Reduce log level for OpenThread state component
+    // "Failed to get active dataset" is normal for MTD devices before joining
+    esp_log_level_set("OT_STATE", ESP_LOG_NONE);  // Silence all OT_STATE logs
+    
+    // Silence RMT peripheral logs (LED errors are non-critical)
+    esp_log_level_set("rmt", ESP_LOG_NONE);
+    esp_log_level_set("led_strip_rmt", ESP_LOG_NONE);
+
     // Initialize LED status and factory reset monitor first so LED shows provisioning state
     led_status_init();
     xTaskCreate(factory_reset_task, "factory_reset", 3072, NULL, 6, NULL);
 
+#ifdef ENABLE_WIFI_PROVISIONING
     ESP_LOGI(TAG, "Starting WiFi Provisioning...");
 
     // Initialize WiFi provisioning system
@@ -111,7 +132,11 @@ void app_main(void) {
     wifi_provisioning_wait_connected();
 
     ESP_LOGI(TAG, "WiFi connected! Starting LwM2M client...");
+#else
+    ESP_LOGI(TAG, "WiFi disabled - Using Thread network only");
+    ESP_LOGI(TAG, "Starting LwM2M client over Thread...");
+#endif
 
-    // Start LwM2M client (stub by default; replace with Anjay integration)
+    // Start LwM2M client (anjay-esp-idf will initialize OpenThread automatically)
     lwm2m_client_start();
 }

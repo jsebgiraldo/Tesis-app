@@ -7,6 +7,7 @@
 
 // Local modules
 #include "wifi_provisioning.h"
+#include "led_status.h"
 #include "driver/gpio.h"
 
 void lwm2m_client_start(void);
@@ -47,12 +48,16 @@ static void factory_reset_task(void* arg)
             } else {
                 pressed_time += poll;
                 if (pressed_time >= hold_ticks) {
-                    // Reached target hold time: perform factory reset then deep sleep
-                    vTaskDelay(pdMS_TO_TICKS(100));
+                    // Reached target hold time: show red blink and perform factory reset
+                    led_status_set_mode(LED_MODE_FACTORY_RESET);
+                    vTaskDelay(pdMS_TO_TICKS(600));
                     nvs_flash_deinit();
                     nvs_flash_erase();
                     // Optional: re-init not required before deep sleep
                     vTaskDelay(pdMS_TO_TICKS(50));
+                    // Turn off LED before sleep (synchronous)
+                    led_status_force_off();
+                    vTaskDelay(pdMS_TO_TICKS(20));
                     // Configure deep-sleep input pulls to keep line high when not pressed
                     gpio_sleep_set_direction(btn, GPIO_MODE_INPUT);
                     gpio_sleep_set_pull_mode(btn, GPIO_PULLUP_ONLY);
@@ -91,6 +96,9 @@ void app_main(void) {
         ESP_LOGE(TAG, "NVS init failed: %d", ret);
         return;
     }
+
+    // Initialize LED status and factory reset monitor first so LED shows provisioning state
+    led_status_init();
 
     // Start factory reset monitor task
     xTaskCreate(factory_reset_task, "factory_reset", 3072, NULL, 6, NULL);

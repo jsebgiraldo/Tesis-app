@@ -253,4 +253,30 @@ config GEOLOC_BASE_URL
 
 endmenu
 
+menu "LED Status Configuration"
+
+config BOARD_HAS_WS2812
+    bool "Board has WS2812 RGB LED"
+    default y
+    help
+        Enable support for WS2812 (NeoPixel) RGB LED status indicator.
+        When enabled, the LED will show different colors for different states:
+        - Blue breathing: Provisioning mode (BLE)
+        - Green solid: WiFi connected
+        - Amber blinking: WiFi connection failed
+        - Red blinking: Factory reset in progress
+
+config BOARD_WS2812_GPIO
+    int "WS2812 LED GPIO number"
+    depends on BOARD_HAS_WS2812
+    default 8
+    range 0 30
+    help
+        GPIO number where the WS2812 RGB LED is connected.
+        Common values:
+        - ESP32-C6 DevKitC-1: GPIO8
+        - ESP32-C6 DevKitM-1: GPIO8
+
+endmenu
+
 # Smart Meter Simulation menu removed; observation cadence is controlled by LwM2M pmin/pmax.

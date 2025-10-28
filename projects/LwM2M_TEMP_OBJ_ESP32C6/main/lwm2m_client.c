@@ -5,7 +5,11 @@
 #include "esp_log.h"
 #include "esp_event.h"
 #include "esp_system.h"
+// WiFi disabled - using Thread only
+// #define ENABLE_WIFI
+#ifdef ENABLE_WIFI
 #include "esp_wifi.h"
+#endif
 #include "esp_netif.h"
 #include <string.h>
 #include <stdlib.h>
@@ -24,6 +28,19 @@
 #include "connectivity_object.h"
 #include "location_object.h"
 #include "bac19_object.h"
+#include "led_status.h"
+
+// OpenThread support
+#if CONFIG_OPENTHREAD_ENABLED
+#include "esp_openthread.h"
+#include "esp_openthread_lock.h"
+#include "esp_openthread_netif_glue.h"
+#include "esp_openthread_types.h"
+#include "thread_joiner.h"      // Para unirse a redes existentes
+// #include "thread_commissioner.h" // Para aceptar nuevos dispositivos (no usado actualmente)
+#include "openthread/instance.h"
+#include "openthread/thread.h"
+#endif
 
 #include <anjay/anjay.h>
 #include <anjay/security.h>
@@ -96,16 +113,6 @@
 // #define APP_SERVER_SSID 1 // not used when Send is removed
 
 static const char *TAG = "lwm2m_client";
-// Returns true if the string is a valid dotted-quad IPv4 literal (e.g., "192.168.3.100")
-static bool is_ipv4_literal(const char *s) {
-    if (!s || !*s) {
-        return false;
-    }
-    ip4_addr_t addr;
-    // inet_aton returns 1 on success, 0 on failure
-    return inet_aton(s, &addr) == 1;
-}
-
 
 // Resolved endpoint name used everywhere (Anjay endpoint and default PSK identity)
 static char g_endpoint_name[64] = "";
@@ -124,6 +131,45 @@ static const char *resolve_endpoint_name(void) {
                     "ESP32C6-%02X%02X%02X%02X%02X%02X",
                     mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
     return g_endpoint_name;
+}
+
+// Helper: Convert hex string to bytes (used for PSK keys in both WiFi and Thread modes)
+static size_t hex_to_bytes(const char *hex, uint8_t *out, size_t out_size) {
+    size_t len = strlen(hex);
+    if (len % 2 != 0) {
+        return 0;
+    }
+    size_t bytes = len / 2;
+    if (bytes > out_size) {
+        return 0;
+    }
+    for (size_t i = 0; i < bytes; ++i) {
+        char c1 = hex[2 * i];
+        char c2 = hex[2 * i + 1];
+        int v1 = (c1 >= '0' && c1 <= '9') ? (c1 - '0')
+                 : (c1 >= 'a' && c1 <= 'f') ? (c1 - 'a' + 10)
+                 : (c1 >= 'A' && c1 <= 'F') ? (c1 - 'A' + 10) : -1;
+        int v2 = (c2 >= '0' && c2 <= '9') ? (c2 - '0')
+                 : (c2 >= 'a' && c2 <= 'f') ? (c2 - 'a' + 10)
+                 : (c2 >= 'A' && c2 <= 'F') ? (c2 - 'A' + 10) : -1;
+        if (v1 < 0 || v2 < 0) {
+            return 0;
+        }
+        out[i] = (uint8_t) ((v1 << 4) | v2);
+    }
+    return bytes;
+}
+
+#ifdef ENABLE_WIFI
+// WiFi-only functions (not used in Thread-only mode)
+// Returns true if the string is a valid dotted-quad IPv4 literal (e.g., "192.168.3.100")
+static bool is_ipv4_literal(const char *s) {
+    if (!s || !*s) {
+        return false;
+    }
+    ip4_addr_t addr;
+    // inet_aton returns 1 on success, 0 on failure
+    return inet_aton(s, &addr) == 1;
 }
 
 // Get current gateway IPv4 of WIFI_STA_DEF; returns true and writes dotted string on success
@@ -175,7 +221,10 @@ static void log_dns_servers(void) {
         }
     }
 }
+#endif // ENABLE_WIFI
 
+#ifdef ENABLE_WIFI
+// WiFi-only DNS helper (not used in Thread-only mode)
 // Ensure a usable DNS server: if none configured, set gateway as DNS
 static void ensure_dns_gateway(void) {
     esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
@@ -212,38 +261,6 @@ static void ensure_dns_gateway(void) {
     }
 }
 
-
-// No manual periodic updates or client-initiated Send; rely on TB Observe/Read
-
-
-// --- Helpers: PSK parsing and retry backoff ---
-static size_t hex_to_bytes(const char *hex, uint8_t *out, size_t out_size) {
-    size_t len = strlen(hex);
-    if (len % 2 != 0) {
-        return 0;
-    }
-    size_t bytes = len / 2;
-    if (bytes > out_size) {
-        return 0;
-    }
-    for (size_t i = 0; i < bytes; ++i) {
-        char c1 = hex[2 * i];
-        char c2 = hex[2 * i + 1];
-        int v1 = (c1 >= '0' && c1 <= '9') ? (c1 - '0')
-                 : (c1 >= 'a' && c1 <= 'f') ? (c1 - 'a' + 10)
-                 : (c1 >= 'A' && c1 <= 'F') ? (c1 - 'A' + 10) : -1;
-        int v2 = (c2 >= '0' && c2 <= '9') ? (c2 - '0')
-                 : (c2 >= 'a' && c2 <= 'f') ? (c2 - 'a' + 10)
-                 : (c2 >= 'A' && c2 <= 'F') ? (c2 - 'A' + 10) : -1;
-        if (v1 < 0 || v2 < 0) {
-            return 0;
-        }
-        out[i] = (uint8_t) ((v1 << 4) | v2);
-    }
-    return bytes;
-}
-// Deprecated: LWM2M_SERVER_URI removed; we now build from hostname, scheme, and port
-
 // Resolve hostname to IPv4 string; returns true on success
 static bool resolve_hostname_ipv4(const char *hostname, char *ip_out, size_t ip_out_size) {
     if (!hostname || !*hostname || !ip_out || ip_out_size < 8) {
@@ -272,8 +289,15 @@ static bool resolve_hostname_ipv4(const char *hostname, char *ip_out, size_t ip_
     freeaddrinfo(res);
     return ok;
 }
+#endif // ENABLE_WIFI
 
-// Build final server URI, optionally replacing host with resolved IP from override hostname
+
+// No manual periodic updates or client-initiated Send; rely on TB Observe/Read
+
+
+// --- Helpers: PSK parsing and retry backoff ---
+
+// Build final server URI using auto-discovered Border Router address
 static void build_final_server_uri(char *out, size_t out_size) {
     // Determine scheme and port from Kconfig choices
     const bool is_secure =
@@ -284,47 +308,49 @@ static void build_final_server_uri(char *out, size_t out_size) {
 #endif
     int port = (int) CONFIG_LWM2M_SERVER_PORT;
 
-    // Choose configured hostname and attempt DNS resolution; fallback to gateway if needed
-    char resolved_ip[48] = {0};
-    const char *host = NULL;
-    const char *configured_host = NULL;
-    // Prefer user-provided hostname when enabled; otherwise use ThingsBoard demo by default
-#if CONFIG_LWM2M_OVERRIDE_HOSTNAME_ENABLE
-    configured_host = CONFIG_LWM2M_OVERRIDE_HOSTNAME;
-#else
-    configured_host = "192.168.3.100";
-#endif
-    ESP_LOGI(TAG, "Hostname config: '%s' (scheme=%s, port=%d)",
-             (configured_host && configured_host[0]) ? configured_host : "(empty)",
-             is_secure ? "coaps" : "coap", port);
-    if (configured_host && configured_host[0]) {
-        if (is_ipv4_literal(configured_host)) {
-            // User provided a numeric IPv4; always prefer it verbatim
-            host = configured_host;
-            ESP_LOGI(TAG, "Using literal IPv4 host %s", host);
-        } else if (resolve_hostname_ipv4(configured_host, resolved_ip, sizeof(resolved_ip))) {
-            host = resolved_ip;
-            ESP_LOGI(TAG, "Resolved hostname '%s' -> %s", configured_host, resolved_ip);
-        } else {
-            // Could not resolve hostname; use it as literal (may or may not route)
-            host = configured_host;
-            //ESP_LOGW(TAG, "DNS resolution failed for '%s'; using literal host", configured_host);
-            // Optional fallback: if a gateway IP is present, you may enable the following
-            // to try the gateway as a last resort in environments where server==gateway.
-            // NOTE: This is disabled for literal IPv4 and for clarity; uncomment only if desired.
-            char gw[32] = {0};
-            if (get_gateway_ipv4(gw, sizeof(gw))) {
-                ESP_LOGW(TAG, "Falling back to gateway IP %s for server host", gw);
-                host = gw;
+#if CONFIG_OPENTHREAD_ENABLED
+    // Auto-discover Border Router candidates
+    char br_candidates[3][46];
+    int num_candidates = thread_joiner_get_border_router_candidates(br_candidates, 3);
+    
+    if (num_candidates > 0) {
+        // Use the first candidate (prioritized by the discovery function)
+        const char *server_ipv6 = br_candidates[0];
+        
+        ESP_LOGI(TAG, "🌐 Using auto-discovered Border Router: %s", server_ipv6);
+        ESP_LOGI(TAG, "   (scheme=%s, port=%d)", is_secure ? "coaps" : "coap", port);
+        
+        // Build URI with IPv6 address in brackets (RFC 3986 format)
+        (void) snprintf(out, out_size, "%s://[%s]:%d", 
+                        is_secure ? "coaps" : "coap", 
+                        server_ipv6, 
+                        port);
+        
+        ESP_LOGI(TAG, "✅ Final LwM2M Server URI: %s", out);
+        
+        // Log alternative candidates if available
+        if (num_candidates > 1) {
+            ESP_LOGI(TAG, "📋 Alternative Border Router candidates:");
+            for (int i = 1; i < num_candidates; i++) {
+                ESP_LOGI(TAG, "   [%d] %s", i, br_candidates[i]);
             }
         }
+        return;
     } else {
-        host = "127.0.0.1";
-        ESP_LOGW(TAG, "Hostname is empty; defaulting to 127.0.0.1");
+        ESP_LOGW(TAG, "⚠️  No Border Router candidates found, using fallback");
     }
+#endif
 
-    (void) snprintf(out, out_size, "%s://%s:%d", is_secure ? "coaps" : "coap", host, port);
-    ESP_LOGI(TAG, "Final LwM2M Server URI: %s", out);
+    // Fallback: Use default Border Router address
+    const char *fallback_ipv6 = "fd11:22::1";
+    ESP_LOGW(TAG, "🌐 Using fallback Border Router IPv6: %s", fallback_ipv6);
+    
+    (void) snprintf(out, out_size, "%s://[%s]:%d", 
+                    is_secure ? "coaps" : "coap", 
+                    fallback_ipv6, 
+                    port);
+    
+    ESP_LOGI(TAG, "📋 Final LwM2M Server URI: %s", out);
 }
 
 static int setup_security(anjay_t *anjay) {
@@ -413,6 +439,8 @@ static int setup_server(anjay_t *anjay) {
 }
 
 // Handle Wi‑Fi/IP events to toggle Anjay offline/online for faster recovery
+// WiFi event handling disabled when using Thread only
+#ifdef ENABLE_WIFI
 static void lwm2m_net_event_handler(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data) {
     anjay_t *anjay = (anjay_t *) arg;
     if (!anjay) {
@@ -423,8 +451,10 @@ static void lwm2m_net_event_handler(void *arg, esp_event_base_t event_base, int3
         (void) anjay_transport_enter_offline(anjay, ANJAY_TRANSPORT_SET_ALL);
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ESP_LOGI(TAG, "Got IP -> exiting LwM2M offline and scheduling reconnect");
+#ifdef ENABLE_WIFI
         ensure_dns_gateway();
         log_dns_servers();
+#endif
         (void) anjay_transport_exit_offline(anjay, ANJAY_TRANSPORT_SET_ALL);
         (void) anjay_transport_schedule_reconnect(anjay, ANJAY_TRANSPORT_SET_ALL);
         (void) anjay_notify_instances_changed(anjay, 3303); // Temperature
@@ -433,6 +463,7 @@ static void lwm2m_net_event_handler(void *arg, esp_event_base_t event_base, int3
         connectivity_object_update(anjay);
     }
 }
+#endif // ENABLE_WIFI
 
 static void lwm2m_client_task(void *arg) {
     // Increase log verbosity for AVSystem/Anjay to aid troubleshooting
@@ -444,16 +475,52 @@ static void lwm2m_client_task(void *arg) {
     const anjay_dm_object_def_t **dev_obj = NULL;
     const anjay_dm_object_def_t **loc_obj = NULL;
     const anjay_dm_object_def_t **bac_obj = NULL;
-    // Optional delay to let Wi‑Fi/ARP settle before first Register
-    if (CONFIG_LWM2M_START_DELAY_MS > 0) {
-        ESP_LOGI(TAG, "Startup delay %d ms before LwM2M init", (int) CONFIG_LWM2M_START_DELAY_MS);
-        vTaskDelay(pdMS_TO_TICKS(CONFIG_LWM2M_START_DELAY_MS));
+    
+#if CONFIG_OPENTHREAD_ENABLED
+    // ===== Initialize OpenThread with static credentials =====
+    ESP_LOGI(TAG, "===== OpenThread Static Configuration =====");
+    ESP_LOGI(TAG, "  Network Name: %s", CONFIG_OPENTHREAD_NETWORK_NAME);
+    ESP_LOGI(TAG, "  PAN ID: 0x%04x", CONFIG_OPENTHREAD_NETWORK_PANID);
+    ESP_LOGI(TAG, "  Channel: %d", CONFIG_OPENTHREAD_NETWORK_CHANNEL);
+    ESP_LOGI(TAG, "  Extended PAN: %s", CONFIG_OPENTHREAD_NETWORK_EXTPANID);
+    ESP_LOGI(TAG, "  Mesh Local Prefix: fd3c:12da:fb6a:d420::/64");
+    ESP_LOGI(TAG, "===========================================");
+    
+    if (thread_joiner_init() == 0) {
+        ESP_LOGI(TAG, "✅ Thread initialized successfully");
+        ESP_LOGI(TAG, "⏳ Waiting for Thread network to attach...");
+        
+        // Wait for Thread ATTACHED bit (blocks until CHILD role is reached)
+        EventGroupHandle_t event_group = thread_joiner_get_event_group();
+        if (event_group) {
+            EventBits_t bits = xEventGroupWaitBits(
+                event_group,
+                THREAD_ATTACHED_BIT,
+                pdFALSE,  // Don't clear bit on exit
+                pdTRUE,   // Wait for all bits
+                portMAX_DELAY  // Wait indefinitely
+            );
+            
+            if (bits & THREAD_ATTACHED_BIT) {
+                ESP_LOGI(TAG, "✅ Thread network attached as CHILD");
+            }
+        } else {
+            ESP_LOGE(TAG, "❌ Thread event group not available");
+        }
+    } else {
+        ESP_LOGE(TAG, "❌ Thread initialization failed!");
     }
+#endif // CONFIG_OPENTHREAD_ENABLED
+    
+    // Optional delay to let network settle before first Register
     // Resolve endpoint name (from config or MAC) and log it once
     resolve_endpoint_name();
     ESP_LOGI(TAG, "LwM2M Endpoint: %s", g_endpoint_name);
-    // Also dump DNS servers now in case IP was acquired before our event handler registration
+    
+#ifdef ENABLE_WIFI
+    // Dump DNS servers now in case IP was acquired before our event handler registration
     log_dns_servers();
+#endif
 
     anjay_configuration_t cfg = {
         .endpoint_name = g_endpoint_name,
@@ -575,11 +642,14 @@ static void lwm2m_client_task(void *arg) {
         }
     }
 #endif // CONFIG_ANJAY_WITH_ATTR_STORAGE
-    // Register network event handlers to manage offline/online
+    
+    // Register network event handlers to manage offline/online (WiFi only)
+#ifdef ENABLE_WIFI
     esp_event_handler_instance_t inst_wifi = NULL;
     esp_event_handler_instance_t inst_ip = NULL;
     (void) esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &lwm2m_net_event_handler, anjay, &inst_wifi);
     (void) esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &lwm2m_net_event_handler, anjay, &inst_ip);
+#endif // ENABLE_WIFI
 
     ESP_LOGI(TAG, "Entering LwM2M main loop (server-driven updates).");
     // Initial hint right after starting: mark sensor objects as changed so server may read/observe
@@ -595,6 +665,9 @@ static void lwm2m_client_task(void *arg) {
 
     const avs_time_duration_t max_wait = avs_time_duration_from_scalar(100, AVS_TIME_MS);
     uint32_t attr_persist_ticks = 0; // ~periodic persistence timer
+#if CONFIG_OPENTHREAD_ENABLED
+    uint32_t role_check_ticks = 0; // Thread role monitor timer
+#endif
     while (1) {
         (void) anjay_event_loop_run(anjay, max_wait);
         // Process Device(3) executes (e.g., Reboot) under server control
@@ -606,6 +679,15 @@ static void lwm2m_client_task(void *arg) {
         onoff_object_update(anjay);
         connectivity_object_update(anjay);
         location_object_update(anjay, loc_obj);
+
+#if CONFIG_OPENTHREAD_ENABLED
+        // Monitor Thread role and update LED every 2 seconds
+        if (++role_check_ticks >= 20) { // 20 * 100ms = 2 seconds
+            role_check_ticks = 0;
+            const char* role = thread_joiner_get_role();
+            led_status_set_thread_role(role);
+        }
+#endif
 #if CONFIG_ANJAY_WITH_ATTR_STORAGE
         // Periodically persist attributes if modified (about every 5 seconds)
         if (++attr_persist_ticks >= 50) { // 50 * 100ms ~ 5s

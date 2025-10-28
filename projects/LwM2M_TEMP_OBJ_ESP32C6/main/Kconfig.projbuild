@@ -209,15 +209,6 @@ config LWM2M_SECURITY_PSK_KEY
         Obtain from ThingsBoard device credentials. Only used if LwM2M Server Scheme
         is set to coaps.
 
-config LWM2M_START_DELAY_MS
-    int "Startup delay before first register (ms)"
-    default 1000
-    range 0 10000
-    help
-        Wait this long after the LwM2M task starts before creating the client
-        and attempting the first Register. Helps avoid transient network/ARP
-        races on some Wi‑Fi setups.
-
 config LWM2M_TASK_STACK_SIZE
     int "LwM2M task stack size (bytes)"
     default 8192
