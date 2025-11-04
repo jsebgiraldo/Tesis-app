@@ -268,6 +268,8 @@ class DLMSToMosquittoBridge:
         logger.info("🚀 Iniciando polling...\n")
         
         consecutive_errors = 0
+        reads_since_reconnect = 0
+        MAX_READS_BEFORE_RECONNECT = 10  # Reconectar preventivamente cada 10 lecturas (~30s con interval=2s)
         
         try:
             while running:
@@ -282,6 +284,7 @@ class DLMSToMosquittoBridge:
                     if self.publish(data):
                         self.success += 1
                         consecutive_errors = 0
+                        reads_since_reconnect += 1
                         
                         # Log
                         values_str = " | ".join([
@@ -289,6 +292,24 @@ class DLMSToMosquittoBridge:
                             for k, v in data.items()
                         ])
                         logger.info(f"📤 {values_str}")
+                        
+                        # Reconexión preventiva cada 10 lecturas para evitar sesión zombie
+                        if reads_since_reconnect >= MAX_READS_BEFORE_RECONNECT:
+                            logger.info(f"🔄 Reconexión preventiva después de {reads_since_reconnect} lecturas")
+                            if self.dlms:
+                                try:
+                                    self.dlms.close()
+                                    time.sleep(1.0)  # Pausa más larga para limpiar socket
+                                except:
+                                    pass
+                            
+                            # Usar connect() completo con reintentos en lugar de dlms.connect()
+                            if self.connect():
+                                reads_since_reconnect = 0
+                                logger.info("✅ DLMS reconectado preventivamente")
+                            else:
+                                logger.error("❌ Error en reconexión preventiva")
+                                consecutive_errors = 5  # Forzar circuit breaker si falla reconexión preventiva
                     else:
                         consecutive_errors += 1
                         logger.warning(f"⚠️ Fallo MQTT")
@@ -296,9 +317,9 @@ class DLMSToMosquittoBridge:
                     consecutive_errors += 1
                     logger.warning(f"⚠️ Sin datos DLMS")
                 
-                # Circuit breaker
-                if consecutive_errors >= 10:
-                    logger.error("⚡ Demasiados errores. Reconectando...")
+                # Circuit breaker - reducido a 5 errores consecutivos
+                if consecutive_errors >= 5:
+                    logger.error("⚡ 5 errores consecutivos. Reconectando...")
                     if self.dlms:
                         try:
                             self.dlms.close()
@@ -307,6 +328,7 @@ class DLMSToMosquittoBridge:
                     if not self.connect():
                         break
                     consecutive_errors = 0
+                    reads_since_reconnect = 0  # Reset contador
                 
                 # Stats cada 20 ciclos
                 if self.total % 20 == 0:
