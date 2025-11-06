@@ -1,0 +1,113 @@
+{
+  "name": "DLMS Connector",
+  "type": "dlms",
+  "enableRemoteLogging": true,
+  "logLevel": "INFO",
+  
+  "devices": [
+    {
+      "name": "medidor_principal",
+      "deviceType": "DLMS_Energy_Meter",
+      "host": "192.168.1.127",
+      "port": 3333,
+      "pollingInterval": 5000,
+      
+      "measurements": [
+        "voltage_l1",
+        "current_l1",
+        "active_power",
+        "reactive_power",
+        "frequency",
+        "active_energy"
+      ],
+      
+      "attributesMapping": {
+        "host": "${host}",
+        "port": "${port}",
+        "meter_type": "DLMS/COSEM",
+        "protocol_version": "IEC 62056-21"
+      },
+      
+      "timeseriesMapping": {
+        "voltage_l1": "${voltage_l1}",
+        "current_l1": "${current_l1}",
+        "active_power": "${active_power}",
+        "reactive_power": "${reactive_power}",
+        "frequency": "${frequency}",
+        "active_energy": "${active_energy}"
+      }
+    },
+    
+    {
+      "name": "medidor_secundario",
+      "deviceType": "DLMS_Energy_Meter",
+      "host": "192.168.1.128",
+      "port": 3333,
+      "pollingInterval": 5000,
+      
+      "measurements": [
+        "voltage_l1",
+        "voltage_l2",
+        "voltage_l3",
+        "current_l1",
+        "current_l2",
+        "current_l3",
+        "active_power",
+        "frequency"
+      ],
+      
+      "attributesMapping": {
+        "host": "${host}",
+        "port": "${port}",
+        "meter_type": "DLMS/COSEM",
+        "phases": "3"
+      },
+      
+      "timeseriesMapping": {
+        "voltage_l1": "${voltage_l1}",
+        "voltage_l2": "${voltage_l2}",
+        "voltage_l3": "${voltage_l3}",
+        "current_l1": "${current_l1}",
+        "current_l2": "${current_l2}",
+        "current_l3": "${current_l3}",
+        "active_power": "${active_power}",
+        "frequency": "${frequency}"
+      }
+    }
+  ],
+  
+  "_comment_measurements": "=== Mediciones DLMS Disponibles ===",
+  "_available_measurements": [
+    "voltage_l1, voltage_l2, voltage_l3 - Voltajes por fase (V)",
+    "current_l1, current_l2, current_l3 - Corrientes por fase (A)",
+    "active_power - Potencia activa total (W)",
+    "reactive_power - Potencia reactiva total (VAr)",
+    "apparent_power - Potencia aparente total (VA)",
+    "power_factor - Factor de potencia",
+    "frequency - Frecuencia de la red (Hz)",
+    "active_energy - Energía activa acumulada (kWh)",
+    "reactive_energy - Energía reactiva acumulada (kVArh)"
+  ],
+  
+  "_comment_config": "=== Configuración Avanzada ===",
+  "connectionTimeout": 10,
+  "requestTimeout": 5,
+  "reconnectDelay": 5,
+  "maxReconnectAttempts": 10,
+  
+  "_comment_watchdog": "=== Watchdog Configuration ===",
+  "watchdog": {
+    "enabled": true,
+    "maxConsecutiveErrors": 15,
+    "maxConsecutiveReadFailures": 10,
+    "maxSilenceMinutes": 10,
+    "reconnectOnError": true
+  },
+  
+  "_comment_circuit_breaker": "=== Circuit Breaker Configuration ===",
+  "circuitBreaker": {
+    "enabled": true,
+    "maxReconnectsPerHour": 10,
+    "pauseMinutes": 5
+  }
+}

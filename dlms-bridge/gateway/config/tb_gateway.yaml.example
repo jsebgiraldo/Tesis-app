@@ -1,0 +1,89 @@
+# ThingsBoard Gateway Configuration
+# ==================================
+# Configuración principal para ThingsBoard Gateway con soporte DLMS
+
+thingsboard:
+  # ThingsBoard host and port
+  host: localhost
+  port: 1883
+  
+  # Security configuration (use token or certificates)
+  security:
+    type: accessToken  # Options: accessToken, tls
+    accessToken: "YOUR_GATEWAY_ACCESS_TOKEN"  # Replace with your gateway token
+    
+    # TLS configuration (if type: tls)
+    # caCert: /path/to/ca.pem
+    # privateKey: /path/to/private.pem
+    # cert: /path/to/cert.pem
+  
+  # Quality of Service for MQTT messages
+  qos: 1
+  
+  # Maximum amount of messages to be stored in queue on disk
+  maxPayloadSizeBytes: 8192
+  
+  # Maximum amount of messages to be stored in queue
+  # minPackSendDelayMS: 200
+  # minPackSizeToSend: 50
+  # checkConnectorsConfigurationInSeconds: 60
+
+connectors:
+  # DLMS Connector Configuration
+  - name: "DLMS Connector"
+    type: custom  # Custom connector type
+    class: DLMSConnector  # Class name in dlms_connector.py
+    module: dlms_connector  # Module name (without .py)
+    
+    # Enable/disable connector
+    enabled: true
+    
+    # Path to connector module (relative to gateway directory)
+    # ThingsBoard Gateway will import from this path
+    # Make sure the connectors/ folder is in PYTHONPATH
+    
+    # Connector-specific configuration
+    configuration: "dlms_connector.json"
+
+# Storage configuration
+storage:
+  type: memory  # Options: memory, file
+  read_records_count: 100
+  max_records_count: 10000
+  
+  # File storage configuration (if type: file)
+  # data_folder_path: storage
+  # max_file_count: 10
+  # max_records_per_file: 10000
+
+# gRPC configuration (optional)
+grpc:
+  enabled: false
+  serverPort: 9595
+  keepaliveTimeMs: 10000
+  keepaliveTimeoutMs: 5000
+  keepalivePermitWithoutCalls: true
+  maxPingsWithoutData: 0
+  minTimeBetweenPingsMs: 10000
+  minPingIntervalWithoutDataMs: 5000
+
+# Remote logging configuration (optional)
+remoteLogging:
+  enabled: false
+  logLevel: INFO
+
+# Statistics configuration
+statisticsConfiguration:
+  enable: true
+  statsSendPeriodInSeconds: 3600
+
+# Device filtering configuration
+deviceFiltering:
+  enable: false
+  
+# Other configuration parameters
+remoteConfiguration: true
+checkingDeviceActivity:
+  checkDeviceInactivity: false
+  inactivityTimeoutSeconds: 120
+  inactivityCheckPeriodSeconds: 10

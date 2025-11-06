@@ -1,0 +1,56 @@
+{
+  "comment": "Configuraci\u00f3n DLMS to MQTT Bridge para ThingsBoard",
+  "_comment_dlms": "=== Configuraci\u00f3n del Medidor DLMS ===",
+  "dlms_host": "192.168.1.127",
+  "dlms_port": 3333,
+  "_comment_mqtt": "=== Configuraci\u00f3n MQTT/ThingsBoard ===",
+  "mqtt_host": "localhost",
+  "mqtt_port": 1883,
+  "access_token": "QrKMI1jxYkK8hnDm3OD4",
+  "_comment_device": "=== Identificaci\u00f3n del Dispositivo ===",
+  "device_name": "medidor_dlms_principal",
+  "_comment_measurements": "=== Mediciones a Recolectar ===",
+  "_measurement_options": [
+    "voltage_l1 (Voltaje Fase A)",
+    "current_l1 (Corriente Fase A)",
+    "frequency (Frecuencia de la red)",
+    "active_power (Potencia activa)",
+    "active_energy (Energ\u00eda activa acumulada)"
+  ],
+  "measurements": [
+    "voltage_l1",
+    "current_l1",
+    "frequency",
+    "active_power",
+    "active_energy"
+  ],
+  "_comment_timing": "=== Configuraci\u00f3n de Tiempo ===",
+  "_interval_note": "Intervalo entre lecturas en segundos. Fase 3 Batch: 1.0s durante pruebas",
+  "interval": 1.0,
+  "_comment_advanced": "=== Configuraci\u00f3n Avanzada (Opcional) ===",
+  "_max_offline_messages": "M\u00e1ximo de mensajes en buffer cuando no hay conexi\u00f3n MQTT",
+  "max_offline_messages": 1000,
+  "_reconnect_delay_base": "Delay base para reconexi\u00f3n MQTT (segundos)",
+  "reconnect_delay_base": 1.0,
+  "_reconnect_delay_max": "Delay m\u00e1ximo para reconexi\u00f3n MQTT (segundos)",
+  "reconnect_delay_max": 60.0,
+  "_comment_thingsboard": "=== Instrucciones para ThingsBoard ===",
+  "_instruction_1": "1. Accede a tu instancia de ThingsBoard (demo.thingsboard.io o tu servidor)",
+  "_instruction_2": "2. Ve a 'Devices' y crea un nuevo dispositivo",
+  "_instruction_3": "3. Copia el 'Access Token' del dispositivo",
+  "_instruction_4": "4. Pega el token en el campo 'access_token' arriba",
+  "_instruction_5": "5. Si usas un servidor propio, actualiza 'mqtt_host' con tu direcci\u00f3n",
+  "_instruction_6": "6. Guarda este archivo y ejecuta: python3 dlms_mqtt_bridge.py",
+  "_comment_telemetry": "=== Telemetr\u00eda Enviada ===",
+  "_telemetry_format": "ThingsBoard recibir\u00e1 datos en formato:",
+  "_telemetry_example": {
+    "ts": 1234567890123,
+    "values": {
+      "voltage_l1": 136.5,
+      "current_l1": 1.33,
+      "frequency": 60.0,
+      "active_power": 181.5,
+      "active_energy": 56281.0
+    }
+  }
+}

@@ -1,0 +1,27 @@
+[Unit]
+Description=DLMS to MQTT Bridge - ThingsBoard Telemetry Service
+After=network.target thingsboard.service
+Wants=network.target
+
+[Service]
+Type=simple
+User=pci
+Group=pci
+WorkingDirectory=/home/pci/Documents/sebas_giraldo/Tesis-app/dlms-bridge
+ExecStart=/usr/bin/python3 /home/pci/Documents/sebas_giraldo/Tesis-app/dlms-bridge/dlms_mqtt_bridge.py --config /home/pci/Documents/sebas_giraldo/Tesis-app/dlms-bridge/mqtt_config.json
+
+# Restart policy
+Restart=always
+RestartSec=10
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=dlms-mqtt-bridge
+
+# Security
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

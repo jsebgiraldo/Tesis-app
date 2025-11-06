@@ -1,0 +1,19 @@
+[Unit]
+Description=QoS Supervisor Service - DLMS Bridge Monitoring
+After=network.target mosquitto.service thingsboard-gateway.service dlms-mosquitto-bridge.service
+Wants=mosquitto.service thingsboard-gateway.service dlms-mosquitto-bridge.service
+
+[Service]
+Type=simple
+User=pci
+WorkingDirectory=/home/pci/Documents/sebas_giraldo/Tesis-app/dlms-bridge
+Environment="PATH=/home/pci/Documents/sebas_giraldo/Tesis-app/dlms-bridge/venv/bin"
+ExecStart=/home/pci/Documents/sebas_giraldo/Tesis-app/dlms-bridge/venv/bin/python3 qos_supervisor_service.py
+Restart=always
+RestartSec=30
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=qos-supervisor
+
+[Install]
+WantedBy=multi-user.target

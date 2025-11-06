@@ -1,0 +1,40 @@
+# ThingsBoard Gateway - Ignore files
+
+# Logs
+logs/*.log
+*.log
+
+# ThingsBoard Gateway runtime
+storage/
+*.db
+*.sqlite
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+
+# Virtual environment
+venv/
+env/
+
+# Configuration (may contain sensitive tokens)
+config/tb_gateway.yaml
+config/dlms_connector.json
+
+# Keep example configs
+!config/tb_gateway.yaml.example
+!config/dlms_connector.json.example
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

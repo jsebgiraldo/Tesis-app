@@ -1,0 +1,28 @@
+[Unit]
+Description=ThingsBoard Gateway - DLMS Bridge
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pci
+Group=pci
+WorkingDirectory=/home/pci/Documents/sebas_giraldo/Tesis-app/dlms-bridge
+Environment="PATH=/home/pci/Documents/sebas_giraldo/Tesis-app/dlms-bridge/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+ExecStart=/home/pci/Documents/sebas_giraldo/Tesis-app/dlms-bridge/venv/bin/python3 simple_gateway_bridge.py --meter-id 1 --interval 5.0
+
+# Restart on failure
+Restart=on-failure
+RestartSec=10
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=tb-gateway-dlms
+
+# Security
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

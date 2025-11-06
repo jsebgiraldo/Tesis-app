@@ -1,0 +1,18 @@
+# ThingsBoard Gateway - DLMS Connector Requirements
+# ==================================================
+# Dependencies for ThingsBoard Gateway with custom DLMS connector
+
+# ThingsBoard Gateway (official)
+thingsboard-gateway>=3.5.0
+
+# DLMS/COSEM Protocol
+dlms-cosem>=22.3.0
+
+# Async support
+asyncio-mqtt>=0.16.0
+
+# Database (for shared config with main system)
+sqlalchemy>=2.0.0
+
+# Utilities
+pyyaml>=6.0

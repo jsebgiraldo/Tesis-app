@@ -1,0 +1,16 @@
+# DLMS/COSEM Protocol
+dlms-cosem==22.3.0
+
+# MQTT with ThingsBoard Official SDK
+tb-mqtt-client>=1.13.0
+tb-paho-mqtt-client>=2.1.2
+
+# Database
+sqlalchemy>=2.0.0
+
+# Network monitoring
+psutil>=5.9.0
+
+# Utilities
+python-dateutil>=2.8.0
+requests>=2.31.0

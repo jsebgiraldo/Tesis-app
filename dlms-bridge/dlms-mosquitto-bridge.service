@@ -1,0 +1,18 @@
+[Unit]
+Description=DLMS to Mosquitto Bridge
+After=network.target mosquitto.service
+Wants=mosquitto.service
+
+[Service]
+Type=simple
+User=pci
+WorkingDirectory=/home/pci/Documents/sebas_giraldo/Tesis-app/dlms-bridge
+Environment="PATH=/home/pci/Documents/sebas_giraldo/Tesis-app/dlms-bridge/venv/bin"
+ExecStart=/home/pci/Documents/sebas_giraldo/Tesis-app/dlms-bridge/venv/bin/python3 dlms_to_mosquitto_bridge.py --meter-id 1 --interval 5.0
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

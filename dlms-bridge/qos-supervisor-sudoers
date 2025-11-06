@@ -1,0 +1,7 @@
+# Permitir que el usuario pci ejecute systemctl restart sin contraseña
+# para los servicios del sistema DLMS
+pci ALL=(ALL) NOPASSWD: /bin/systemctl restart mosquitto.service
+pci ALL=(ALL) NOPASSWD: /bin/systemctl restart dlms-mosquitto-bridge.service
+pci ALL=(ALL) NOPASSWD: /bin/systemctl restart thingsboard-gateway.service
+pci ALL=(ALL) NOPASSWD: /bin/systemctl is-active *
+pci ALL=(ALL) NOPASSWD: /bin/systemctl show *
