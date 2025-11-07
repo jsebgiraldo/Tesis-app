@@ -1,0 +1,28 @@
+# .gitignore para ESP32C6 OpenThread Project
+
+# ESP-IDF build output
+build/
+sdkconfig
+sdkconfig.old
+*.pyc
+
+# Dependencies
+dependencies.lock
+managed_components/
+
+# VS Code
+.vscode/
+!.vscode/tasks.json
+!.vscode/launch.json
+.vscode/settings.json
+.vscode/c_cpp_properties.json
+
+# OS specific
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Flash download tool
+download.config
