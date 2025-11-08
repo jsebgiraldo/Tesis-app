@@ -6,6 +6,7 @@
 #include "openthread/dns_client.h"
 #include "esp_log.h"
 #include "ot_auto_discovery.h"
+#include "lwm2m_client.h"
 #include <string.h>
 #include <stdio.h>
 
@@ -232,6 +233,81 @@ static otError bestlwm2m_command_handler(void *aContext, uint8_t aArgsLength, ch
     return OT_ERROR_NONE;
 }
 
+// Handler for "lwm2m" command
+static otError lwm2m_command_handler(void *aContext, uint8_t aArgsLength, char *aArgs[])
+{
+    if (aArgsLength == 0) {
+        otCliOutputFormat("=== LwM2M CLIENT COMMANDS ===\r\n");
+        otCliOutputFormat("lwm2m start        - Start LwM2M client\r\n");
+        otCliOutputFormat("lwm2m stop         - Stop LwM2M client\r\n");
+        otCliOutputFormat("lwm2m status       - Show client status\r\n");
+        otCliOutputFormat("lwm2m autoconnect  - Auto-configure from discovered service\r\n");
+        otCliOutputFormat("lwm2m temp <val>   - Update temperature value\r\n");
+        return OT_ERROR_NONE;
+    }
+
+    const char *subcmd = aArgs[0];
+
+    if (strcmp(subcmd, "start") == 0) {
+        esp_err_t result = lwm2m_client_start();
+        if (result == ESP_OK) {
+            otCliOutputFormat("LwM2M client started\r\n");
+        } else {
+            otCliOutputFormat("Failed to start LwM2M client: %s\r\n", esp_err_to_name(result));
+        }
+    }
+    else if (strcmp(subcmd, "stop") == 0) {
+        esp_err_t result = lwm2m_client_stop();
+        if (result == ESP_OK) {
+            otCliOutputFormat("LwM2M client stopped\r\n");
+        } else {
+            otCliOutputFormat("Failed to stop LwM2M client: %s\r\n", esp_err_to_name(result));
+        }
+    }
+    else if (strcmp(subcmd, "status") == 0) {
+        otCliOutputFormat("=== LwM2M CLIENT STATUS ===\r\n");
+        otCliOutputFormat("State: %s\r\n", lwm2m_client_get_state_str());
+    }
+    else if (strcmp(subcmd, "autoconnect") == 0) {
+        discovered_service_t best_service;
+        
+        if (ot_auto_discovery_get_best_lwm2m_service(&best_service)) {
+            esp_err_t result = lwm2m_client_auto_configure(&best_service);
+            if (result == ESP_OK) {
+                otCliOutputFormat("LwM2M client auto-configured successfully\r\n");
+                otCliOutputFormat("Server: %s:%d\r\n", best_service.ipv6_addr, best_service.port);
+                otCliOutputFormat("Use 'lwm2m start' to begin registration\r\n");
+            } else {
+                otCliOutputFormat("Failed to auto-configure: %s\r\n", esp_err_to_name(result));
+            }
+        } else {
+            otCliOutputFormat("No LwM2M service found\r\n");
+            otCliOutputFormat("Run 'autostart' first to discover services\r\n");
+        }
+    }
+    else if (strcmp(subcmd, "temp") == 0) {
+        if (aArgsLength < 2) {
+            otCliOutputFormat("Usage: lwm2m temp <temperature>\r\n");
+            return OT_ERROR_INVALID_ARGS;
+        }
+        
+        float temp = atof(aArgs[1]);
+        esp_err_t result = lwm2m_client_update_temperature(temp);
+        if (result == ESP_OK) {
+            otCliOutputFormat("Temperature updated to %.1f°C\r\n", temp);
+        } else {
+            otCliOutputFormat("Failed to update temperature\r\n");
+        }
+    }
+    else {
+        otCliOutputFormat("Unknown subcommand: %s\r\n", subcmd);
+        otCliOutputFormat("Use 'lwm2m' to see available commands\r\n");
+        return OT_ERROR_INVALID_ARGS;
+    }
+
+    return OT_ERROR_NONE;
+}
+
 // Command table
 static const otCliCommand kCommands[] = {
     {"discover", discover_command_handler},
@@ -241,6 +317,7 @@ static const otCliCommand kCommands[] = {
     {"bestlwm2m", bestlwm2m_command_handler},
     {"setnetkey", setnetkey_command_handler},
     {"joinbr", joinbr_command_handler},
+    {"lwm2m", lwm2m_command_handler},
 };
 
 // Initialize custom commands
@@ -261,5 +338,6 @@ void ot_custom_commands_init(void)
         ESP_LOGI(TAG, "  discover <svc> - Find specific service");
         ESP_LOGI(TAG, "  findall        - Find all services");
         ESP_LOGI(TAG, "  bestlwm2m      - Get best LwM2M service");
+        ESP_LOGI(TAG, "  lwm2m          - LwM2M client commands");
     }
 }

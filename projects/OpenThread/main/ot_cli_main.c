@@ -20,9 +20,14 @@
 #include "openthread/instance.h"
 #include "openthread/logging.h"
 #include "openthread/tasklet.h"
+#include "openthread/dataset.h"
+#include "openthread/thread.h"
+#include "openthread/ip6.h"
+#include "openthread/cli.h"
 #include "sdkconfig.h"
 #include "ot_custom_commands.h"
 #include "ot_auto_discovery.h"
+#include "lwm2m_client.h"
 
 #define TAG "ot_esp32c6"
 
@@ -76,15 +81,85 @@ static void ot_task_worker(void *aContext)
         }
     };
     
+    // Join existing network using CLI commands (prevents forming new partition)
+    ESP_LOGI(TAG, "Joining OpenThreadDemo network...");
+    ESP_LOGI(TAG, "Network: %s, PAN ID: 0x%04x, Channel: %d", 
+             auto_config.network_name, auto_config.panid, auto_config.channel);
+    
+    // Wait for OpenThread to initialize
+    vTaskDelay(pdMS_TO_TICKS(2000));
+    
+    // Configure dataset using CLI commands to ensure proper join behavior
+    // IMPORTANT: Commands must be in MUTABLE buffers (otCliInputLine modifies them)
+    char cmd_clear[] = "dataset clear";
+    char cmd_commit[] = "dataset commit active";
+    char cmd_ifup[] = "ifconfig up";
+    char cmd_start[] = "thread start";
+    char cmd_key[] = "dataset networkkey 00112233445566778899aabbccddeeff";
+    char cmd[128];
+    
+    // Clear any existing dataset
+    otCliInputLine(cmd_clear);
+    vTaskDelay(pdMS_TO_TICKS(100));
+    
+    // Configure network parameters
+    snprintf(cmd, sizeof(cmd), "dataset networkname %s", auto_config.network_name);
+    otCliInputLine(cmd);
+    vTaskDelay(pdMS_TO_TICKS(100));
+    
+    snprintf(cmd, sizeof(cmd), "dataset panid 0x%04x", auto_config.panid);
+    otCliInputLine(cmd);
+    vTaskDelay(pdMS_TO_TICKS(100));
+    
+    snprintf(cmd, sizeof(cmd), "dataset channel %d", auto_config.channel);
+    otCliInputLine(cmd);
+    vTaskDelay(pdMS_TO_TICKS(100));
+    
+    snprintf(cmd, sizeof(cmd), "dataset extpanid %016llx", auto_config.ext_panid);
+    otCliInputLine(cmd);
+    vTaskDelay(pdMS_TO_TICKS(100));
+    
+    // Set network key
+    otCliInputLine(cmd_key);
+    vTaskDelay(pdMS_TO_TICKS(100));
+    
+    // Commit dataset
+    otCliInputLine(cmd_commit);
+    vTaskDelay(pdMS_TO_TICKS(500));
+    
+    ESP_LOGI(TAG, "Dataset configured, starting interface...");
+    
+    // Enable interface
+    otCliInputLine(cmd_ifup);
+    vTaskDelay(pdMS_TO_TICKS(500));
+    
+    // Start Thread protocol - this will SCAN and JOIN existing network
+    ESP_LOGI(TAG, "Starting Thread - will scan for existing network on channel %d...", auto_config.channel);
+    otCliInputLine(cmd_start);
+    
+    ESP_LOGI(TAG, "Thread started - scanning for network OpenThreadDemo on channel %d", auto_config.channel);
+    ESP_LOGI(TAG, "Use 'state' command to check role once attached");
+    
+    // Wait for network attachment before starting service discovery
+    ESP_LOGI(TAG, "Waiting 10 seconds for network attachment...");
+    vTaskDelay(pdMS_TO_TICKS(10000));
+    
+        // Initialize auto-discovery for LwM2M service discovery
+    ESP_LOGI(TAG, "Starting service discovery...");
     esp_err_t ret = ot_auto_discovery_init(&auto_config);
     if (ret == ESP_OK) {
-        ESP_LOGI(TAG, "Auto-discovery system initialized");
-        
-        // Start auto-discovery in 5 seconds to allow OpenThread to fully initialize
-        vTaskDelay(pdMS_TO_TICKS(5000));
+        ESP_LOGI(TAG, "Auto-discovery initialized for service discovery");
         ot_auto_discovery_start();
     } else {
         ESP_LOGE(TAG, "Failed to initialize auto-discovery: %s", esp_err_to_name(ret));
+    }
+    
+    // Initialize LwM2M client
+    ret = lwm2m_client_init();
+    if (ret == ESP_OK) {
+        ESP_LOGI(TAG, "LwM2M client initialized");
+    } else {
+        ESP_LOGE(TAG, "Failed to initialize LwM2M client: %s", esp_err_to_name(ret));
     }
 
     esp_openthread_cli_create_task();
