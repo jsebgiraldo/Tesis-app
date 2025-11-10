@@ -303,22 +303,31 @@ check_services:
         // Get and display IPv6 addresses
         esp_openthread_lock_acquire(portMAX_DELAY);
         const otNetifAddress *unicastAddrs = otIp6GetUnicastAddresses(instance);
-        ESP_LOGI(TAG, "=== ASSIGNED IPv6 ADDRESSES ===");
+        
+        // Count addresses and get primary address
         int addr_count = 0;
+        char primary_ipv6[64] = "";
         for (const otNetifAddress *addr = unicastAddrs; addr; addr = addr->mNext) {
-            char ipv6_str[64];
-            otIp6AddressToString(&addr->mAddress, ipv6_str, sizeof(ipv6_str));
-            ESP_LOGI(TAG, "IPv6[%d]: %s", addr_count++, ipv6_str);
+            if (addr_count == 0) {
+                otIp6AddressToString(&addr->mAddress, primary_ipv6, sizeof(primary_ipv6));
+            }
+            addr_count++;
         }
         esp_openthread_lock_release();
         
+        // Log single line with connection summary
+        ESP_LOGI(TAG, "✅ Connected as %s | %d IPv6 addresses | Primary: %s", 
+                 role == OT_DEVICE_ROLE_CHILD ? "Child" :
+                 role == OT_DEVICE_ROLE_ROUTER ? "Router" : "Leader",
+                 addr_count, primary_ipv6);
+        
         if (s_config.auto_discover_services) {
             s_state = STATE_DISCOVERING_SERVICES;
-            ESP_LOGI(TAG, "Discovering services...");
-            ESP_LOGI(TAG, "Use these commands to discover services:");
-            ESP_LOGI(TAG, "dns browse _coap._udp.default.service.arpa.");
-            ESP_LOGI(TAG, "dns browse _coaps._udp.default.service.arpa.");
-            ESP_LOGI(TAG, "Or use simplified commands: 'discover coap', 'discover coaps'");
+            ESP_LOGD(TAG, "Discovering services...");
+            ESP_LOGD(TAG, "Use these commands to discover services:");
+            ESP_LOGD(TAG, "dns browse _coap._udp.default.service.arpa.");
+            ESP_LOGD(TAG, "dns browse _coaps._udp.default.service.arpa.");
+            ESP_LOGD(TAG, "Or use simplified commands: 'discover coap', 'discover coaps'");
             
             // Simulate some discovered services for demo
             if (s_service_count < MAX_SERVICES) {
@@ -331,22 +340,24 @@ check_services:
                 service->ping_success = false;  // Will be tested later
                 s_service_count++;
                 
-                ESP_LOGI(TAG, "Sample service added for LwM2M testing");
+                ESP_LOGD(TAG, "Sample service added for LwM2M testing");
             }
         }
     }
 
     s_state = STATE_COMPLETED;
-    ESP_LOGI(TAG, "Auto-discovery process completed");
-
-    // Print summary
-    ESP_LOGI(TAG, "=== AUTO-DISCOVERY SUMMARY ===");
-    ESP_LOGI(TAG, "Networks found: %d", s_network_count);
-    ESP_LOGI(TAG, "Services found: %d", s_service_count);
-    ESP_LOGI(TAG, "Connected: %s", ot_auto_discovery_is_connected() ? "Yes" : "No");
+    ESP_LOGI(TAG, "🎯 Auto-discovery completed | Networks: %d | Services: %d | Status: %s",
+             s_network_count, s_service_count, 
+             ot_auto_discovery_is_connected() ? "Connected" : "Disconnected");
+    
+    // Detailed output at DEBUG level only
+    ESP_LOGD(TAG, "=== AUTO-DISCOVERY SUMMARY ===");
+    ESP_LOGD(TAG, "Networks found: %d", s_network_count);
+    ESP_LOGD(TAG, "Services found: %d", s_service_count);
+    ESP_LOGD(TAG, "Connected: %s", ot_auto_discovery_is_connected() ? "Yes" : "No");
     
     for (int i = 0; i < s_network_count; i++) {
-        ESP_LOGI(TAG, "Network %d: %s (PAN: 0x%04X, Ch: %d, RSSI: %d, Joinable: %s)",
+        ESP_LOGD(TAG, "Network %d: %s (PAN: 0x%04X, Ch: %d, RSSI: %d, Joinable: %s)",
                  i+1, 
                  s_discovered_networks[i].network_name,
                  s_discovered_networks[i].panid,
@@ -356,7 +367,7 @@ check_services:
     }
     
     for (int i = 0; i < s_service_count; i++) {
-        ESP_LOGI(TAG, "Service %d: %s (%s) at %s:%d", 
+        ESP_LOGD(TAG, "Service %d: %s (%s) at %s:%d", 
                  i+1, 
                  s_discovered_services[i].service_name,
                  s_discovered_services[i].service_type,

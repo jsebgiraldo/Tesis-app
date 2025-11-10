@@ -236,6 +236,12 @@ static otError bestlwm2m_command_handler(void *aContext, uint8_t aArgsLength, ch
 // Handler for "lwm2m" command
 static otError lwm2m_command_handler(void *aContext, uint8_t aArgsLength, char *aArgs[])
 {
+    // TODO: Implement with proper Anjay API
+    otCliOutputFormat("LwM2M commands not yet implemented\r\n");
+    otCliOutputFormat("Will be implemented using Anjay library\r\n");
+    return OT_ERROR_NOT_IMPLEMENTED;
+    
+    /* Original implementation - to be migrated to Anjay:
     if (aArgsLength == 0) {
         otCliOutputFormat("=== LwM2M CLIENT COMMANDS ===\r\n");
         otCliOutputFormat("lwm2m start        - Start LwM2M client\r\n");
@@ -306,6 +312,7 @@ static otError lwm2m_command_handler(void *aContext, uint8_t aArgsLength, char *
     }
 
     return OT_ERROR_NONE;
+    */
 }
 
 // Command table
@@ -329,15 +336,15 @@ void ot_custom_commands_init(void)
     if (error != OT_ERROR_NONE) {
         ESP_LOGE(TAG, "Failed to register custom commands: %d", error);
     } else {
-        ESP_LOGI(TAG, "Custom commands registered successfully");
-        ESP_LOGI(TAG, "Available commands:");
-        ESP_LOGI(TAG, "  joinbr [netkey] - Quick join Border Router");
-        ESP_LOGI(TAG, "  setnetkey <hex> - Set network key");
-        ESP_LOGI(TAG, "  autostart      - Start auto-discovery");
-        ESP_LOGI(TAG, "  autostatus     - Check discovery status");
-        ESP_LOGI(TAG, "  discover <svc> - Find specific service");
-        ESP_LOGI(TAG, "  findall        - Find all services");
-        ESP_LOGI(TAG, "  bestlwm2m      - Get best LwM2M service");
-        ESP_LOGI(TAG, "  lwm2m          - LwM2M client commands");
+        ESP_LOGD(TAG, "Custom commands registered successfully");
+        ESP_LOGD(TAG, "Available commands:");
+        ESP_LOGD(TAG, "  joinbr [netkey] - Quick join Border Router");
+        ESP_LOGD(TAG, "  setnetkey <hex> - Set network key");
+        ESP_LOGD(TAG, "  autostart      - Start auto-discovery");
+        ESP_LOGD(TAG, "  autostatus     - Check discovery status");
+        ESP_LOGD(TAG, "  discover <svc> - Find specific service");
+        ESP_LOGD(TAG, "  findall        - Find all services");
+        ESP_LOGD(TAG, "  bestlwm2m      - Get best LwM2M service");
+        ESP_LOGD(TAG, "  lwm2m          - LwM2M client commands");
     }
 }
